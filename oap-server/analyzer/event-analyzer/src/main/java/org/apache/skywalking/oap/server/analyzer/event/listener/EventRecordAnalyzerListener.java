@@ -18,6 +18,9 @@
 
 package org.apache.skywalking.oap.server.analyzer.event.listener;
 
+import java.util.ArrayList;
+import java.util.List;
+import com.google.common.base.Strings;
 import com.google.gson.Gson;
 import lombok.RequiredArgsConstructor;
 import org.apache.skywalking.apm.network.event.v3.Source;
@@ -26,7 +29,10 @@ import org.apache.skywalking.oap.server.core.analysis.Layer;
 import org.apache.skywalking.oap.server.core.analysis.TimeBucket;
 import org.apache.skywalking.oap.server.core.analysis.worker.MetricsStreamProcessor;
 import org.apache.skywalking.oap.server.core.config.NamingControl;
+import org.apache.skywalking.oap.server.core.source.EndpointEvent;
 import org.apache.skywalking.oap.server.core.source.Event;
+import org.apache.skywalking.oap.server.core.source.ServiceEvent;
+import org.apache.skywalking.oap.server.core.source.ServiceInstanceEvent;
 import org.apache.skywalking.oap.server.core.source.SourceReceiver;
 import org.apache.skywalking.oap.server.library.module.ModuleManager;
 
@@ -41,40 +47,54 @@ public class EventRecordAnalyzerListener implements EventAnalyzerListener {
 
     private final SourceReceiver sourceReceiver;
 
-    private final Event event = new Event();
+    private final List<Event> events = new ArrayList<>();
 
     @Override
     public void build() {
-        MetricsStreamProcessor.getInstance().in(event);
-        sourceReceiver.receive(event);
+        events.forEach(MetricsStreamProcessor.getInstance()::in);
+        events.forEach(sourceReceiver::receive);
     }
 
     @Override
     public void parse(final org.apache.skywalking.apm.network.event.v3.Event e) {
-        event.setLayer(Layer.nameOf(e.getLayer()));
+        if (!e.hasSource()) {
+            return;
+        }
 
-        event.setUuid(e.getUuid());
+        final Source source = e.getSource();
+        final List<Event> events = new ArrayList<>();
+        events.add(new ServiceEvent());
+        if (!Strings.isNullOrEmpty(source.getServiceInstance())) {
+            events.add(new ServiceInstanceEvent());
+        }
+        if (!Strings.isNullOrEmpty(source.getEndpoint())) {
+            events.add(new EndpointEvent());
+        }
 
-        if (e.hasSource()) {
-            final Source source = e.getSource();
+        events.forEach(event -> {
+            event.setLayer(Layer.nameOf(e.getLayer()));
+
+            event.setUuid(e.getUuid());
+
             event.setService(namingControl.formatServiceName(source.getService()));
             event.setServiceInstance(namingControl.formatInstanceName(source.getServiceInstance()));
-            event.setEndpoint(namingControl.formatEndpointName(source.getService(), source.getEndpoint()));
-        }
+            event.setEndpoint(
+                namingControl.formatEndpointName(source.getService(), source.getEndpoint()));
 
-        event.setName(e.getName());
-        event.setType(e.getType().name());
-        event.setMessage(e.getMessage());
-        if (e.getParametersCount() > 0) {
-            event.setParameters(GSON.toJson(e.getParametersMap()));
-        }
-        event.setStartTime(e.getStartTime());
-        event.setEndTime(e.getEndTime());
-        if (e.getStartTime() > 0) {
-            event.setTimeBucket(TimeBucket.getMinuteTimeBucket(e.getStartTime()));
-        } else if (e.getEndTime() > 0) {
-            event.setTimeBucket(TimeBucket.getMinuteTimeBucket(e.getEndTime()));
-        }
+            event.setName(e.getName());
+            event.setType(e.getType().name());
+            event.setMessage(e.getMessage());
+            if (e.getParametersCount() > 0) {
+                event.setParameters(GSON.toJson(e.getParametersMap()));
+            }
+            event.setStartTime(e.getStartTime());
+            event.setEndTime(e.getEndTime());
+            if (e.getStartTime() > 0) {
+                event.setTimeBucket(TimeBucket.getMinuteTimeBucket(e.getStartTime()));
+            } else if (e.getEndTime() > 0) {
+                event.setTimeBucket(TimeBucket.getMinuteTimeBucket(e.getEndTime()));
+            }
+        });
     }
 
     public static class Factory implements EventAnalyzerListener.Factory {

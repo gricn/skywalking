@@ -16,10 +16,22 @@
  *
  */
 
-event_total = from(Event.*).count();
+service_event_total = from(ServiceEvent.*).count();
+service_instance_event_total = from(ServiceInstanceEvent.*).count();
+endpoint_event_total = from(EndpointEvent.*).count();
 
-event_normal_count = from(Event.*).filter(type == "Normal").count();
-event_error_count = from(Event.*).filter(type == "Error").count();
+service_event_normal_count = from(ServiceEvent.*).filter(type == "Normal").count();
+service_instance_event_normal_count = from(ServiceInstanceEvent.*).filter(type == "Normal").count();
+endpoint_event_normal_count = from(EndpointEvent.*).filter(type == "Normal").count();
 
-event_start_count = from(Event.*).filter(name == "Start").count();
-event_shutdown_count = from(Event.*).filter(name == "Shutdown").count();
+service_event_error_count = from(ServiceEvent.*).filter(type == "Error").count();
+service_instance_event_error_count = from(ServiceInstanceEvent.*).filter(type == "Error").count();
+endpoint_event_error_count = from(EndpointEvent.*).filter(type == "Error").count();
+
+service_event_start_count = from(ServiceEvent.*).filter(name == "Start").count();
+service_instance_event_start_count = from(ServiceInstanceEvent.*).filter(name == "Start").count();
+endpoint_event_start_count = from(EndpointEvent.*).filter(name == "Start").count();
+
+service_event_shutdown_count = from(ServiceEvent.*).filter(name == "Shutdown").count();
+service_instance_event_shutdown_count = from(ServiceInstanceEvent.*).filter(name == "Shutdown").count();
+endpoint_event_shutdown_count = from(EndpointEvent.*).filter(name == "Shutdown").count();

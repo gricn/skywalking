@@ -92,8 +92,6 @@ public class DefaultScopeDefine {
     public static final int LOG = 41;
     public static final int ENDPOINT_META = 42;
 
-    public static final int EVENT = 43;
-
     public static final int SERVICE_INSTANCE_JVM_CLASS = 44;
 
     public static final int PROCESS = 45;
@@ -102,6 +100,10 @@ public class DefaultScopeDefine {
     public static final int EBPF_PROFILING_DATA = 48;
     public static final int SERVICE_LABEL = 49;
     public static final int TAG_AUTOCOMPLETE = 50;
+
+    public static final int SERVICE_EVENT = 51;
+    public static final int SERVICE_INSTANCE_EVENT = 52;
+    public static final int ENDPOINT_EVENT = 53;
 
     /**
      * Catalog of scope, the metrics processor could use this to group all generated metrics by oal rt.

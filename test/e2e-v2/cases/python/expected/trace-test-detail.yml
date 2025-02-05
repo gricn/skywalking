@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+debuggingtrace: null
 spans:
   {{- contains .spans }}
   - traceid: {{ notEmpty .traceid }}
@@ -36,6 +37,7 @@ spans:
         value: POST
       {{- end }}
     logs: []
+    attachedevents: []
   - traceid: {{ notEmpty .traceid }}
     segmentid: {{ notEmpty .segmentid }}
     spanid: {{ .spanid }}
@@ -61,6 +63,7 @@ spans:
         value: "200"
       {{- end }}
     logs: []
+    attachedevents: []
   - traceid: {{ notEmpty .traceid }}
     segmentid: {{ notEmpty .segmentid }}
     spanid: {{ .spanid }}
@@ -90,6 +93,7 @@ spans:
         value: POST
       {{- end }}
     logs: []
+    attachedevents: []
   - traceid: {{ notEmpty .traceid }}
     segmentid: {{ notEmpty .segmentid }}
     spanid: {{ .spanid }}
@@ -113,6 +117,7 @@ spans:
         value: POST
       {{- end }}
     logs: []
+    attachedevents: []
   - traceid: {{ notEmpty .traceid }}
     segmentid: {{ notEmpty .segmentid }}
     spanid: {{ .spanid }}
@@ -140,6 +145,7 @@ spans:
         value: POST
       {{- end }}
     logs: []
+    attachedevents: []
   - traceid: {{ notEmpty .traceid }}
     segmentid: {{ notEmpty .segmentid }}
     spanid: {{ .spanid }}
@@ -165,6 +171,7 @@ spans:
         value: "200"
       {{- end }}
     logs: []
+    attachedevents: []
   - traceid: {{ notEmpty .traceid }}
     segmentid: {{ notEmpty .segmentid }}
     spanid: {{ .spanid }}
@@ -192,4 +199,5 @@ spans:
         value: POST
       {{- end }}
     logs: []
+    attachedevents: []
   {{- end }}

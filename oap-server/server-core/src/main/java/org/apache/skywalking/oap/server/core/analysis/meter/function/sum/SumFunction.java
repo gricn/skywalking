@@ -31,15 +31,15 @@ import org.apache.skywalking.oap.server.core.analysis.meter.function.AcceptableV
 import org.apache.skywalking.oap.server.core.analysis.meter.function.MeterFunction;
 import org.apache.skywalking.oap.server.core.analysis.metrics.LongValueHolder;
 import org.apache.skywalking.oap.server.core.analysis.metrics.Metrics;
-import org.apache.skywalking.oap.server.core.analysis.metrics.annotation.Entrance;
-import org.apache.skywalking.oap.server.core.analysis.metrics.annotation.SourceFrom;
-import org.apache.skywalking.oap.server.core.query.sql.Function;
 import org.apache.skywalking.oap.server.core.remote.grpc.proto.RemoteData;
+import org.apache.skywalking.oap.server.core.storage.StorageID;
 import org.apache.skywalking.oap.server.core.storage.annotation.BanyanDB;
 import org.apache.skywalking.oap.server.core.storage.annotation.Column;
+import org.apache.skywalking.oap.server.core.storage.annotation.ElasticSearch;
 import org.apache.skywalking.oap.server.core.storage.type.Convert2Entity;
 import org.apache.skywalking.oap.server.core.storage.type.Convert2Storage;
 import org.apache.skywalking.oap.server.core.storage.type.StorageBuilder;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
 
 @ToString
 @MeterFunction(functionName = "sum")
@@ -48,29 +48,27 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
 
     @Setter
     @Getter
-    @Column(columnName = ENTITY_ID, length = 512)
-    @BanyanDB.ShardingKey(index = 0)
+    @ElasticSearch.EnableDocValues
+    @Column(name = ENTITY_ID, length = 512)
+    @BanyanDB.SeriesID(index = 0)
     private String entityId;
 
     @Setter
     @Getter
-    @Column(columnName = InstanceTraffic.SERVICE_ID)
+    @Column(name = InstanceTraffic.SERVICE_ID)
     private String serviceId;
 
     @Getter
     @Setter
-    @Column(columnName = VALUE, dataType = Column.ValueDataType.COMMON_VALUE, function = Function.Sum)
+    @ElasticSearch.EnableDocValues
+    @Column(name = VALUE, dataType = Column.ValueDataType.COMMON_VALUE)
+    @BanyanDB.MeasureField
     private long value;
-
-    @Entrance
-    public final void combine(@SourceFrom long value) {
-        setValue(this.value + value);
-    }
 
     @Override
     public final boolean combine(Metrics metrics) {
         final SumFunction sumFunc = (SumFunction) metrics;
-        combine(sumFunc.getValue());
+        this.value += sumFunc.getValue();
         return true;
     }
 
@@ -85,6 +83,13 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
         metrics.setTimeBucket(toTimeBucketInHour());
         metrics.setServiceId(getServiceId());
         metrics.setValue(getValue());
+
+        metrics.setAttr0(getAttr0());
+        metrics.setAttr1(getAttr1());
+        metrics.setAttr2(getAttr2());
+        metrics.setAttr3(getAttr3());
+        metrics.setAttr4(getAttr4());
+        metrics.setAttr5(getAttr5());
         return metrics;
     }
 
@@ -95,6 +100,13 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
         metrics.setTimeBucket(toTimeBucketInDay());
         metrics.setServiceId(getServiceId());
         metrics.setValue(getValue());
+
+        metrics.setAttr0(getAttr0());
+        metrics.setAttr1(getAttr1());
+        metrics.setAttr2(getAttr2());
+        metrics.setAttr3(getAttr3());
+        metrics.setAttr4(getAttr4());
+        metrics.setAttr5(getAttr5());
         return metrics;
     }
 
@@ -110,6 +122,30 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
 
         setEntityId(remoteData.getDataStrings(0));
         setServiceId(remoteData.getDataStrings(1));
+
+        if (StringUtil.isNotEmpty(remoteData.getDataStrings(2))) {
+            setAttr0(remoteData.getDataStrings(2));
+        }
+
+        if (StringUtil.isNotEmpty(remoteData.getDataStrings(3))) {
+            setAttr1(remoteData.getDataStrings(3));
+        }
+
+        if (StringUtil.isNotEmpty(remoteData.getDataStrings(4))) {
+            setAttr2(remoteData.getDataStrings(4));
+        }
+
+        if (StringUtil.isNotEmpty(remoteData.getDataStrings(5))) {
+            setAttr3(remoteData.getDataStrings(5));
+        }
+
+        if (StringUtil.isNotEmpty(remoteData.getDataStrings(6))) {
+            setAttr4(remoteData.getDataStrings(6));
+        }
+
+        if (StringUtil.isNotEmpty(remoteData.getDataStrings(7))) {
+            setAttr5(remoteData.getDataStrings(7));
+        }
     }
 
     @Override
@@ -122,16 +158,25 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
         remoteBuilder.addDataStrings(getEntityId());
         remoteBuilder.addDataStrings(getServiceId());
 
+        remoteBuilder.addDataStrings(getAttr0() == null ? Const.EMPTY_STRING : getAttr0());
+        remoteBuilder.addDataStrings(getAttr1() == null ? Const.EMPTY_STRING : getAttr1());
+        remoteBuilder.addDataStrings(getAttr2() == null ? Const.EMPTY_STRING : getAttr2());
+        remoteBuilder.addDataStrings(getAttr3() == null ? Const.EMPTY_STRING : getAttr3());
+        remoteBuilder.addDataStrings(getAttr4() == null ? Const.EMPTY_STRING : getAttr4());
+        remoteBuilder.addDataStrings(getAttr5() == null ? Const.EMPTY_STRING : getAttr5());
         return remoteBuilder;
     }
 
     @Override
-    protected String id0() {
-        return getTimeBucket() + Const.ID_CONNECTOR + getEntityId();
+    protected StorageID id0() {
+        return new StorageID()
+            .append(TIME_BUCKET, getTimeBucket())
+            .append(ENTITY_ID, getEntityId());
     }
 
     @Override
     public void accept(final MeterEntity entity, final Long value) {
+        decorate(entity);
         setEntityId(entity.id());
         setServiceId(entity.serviceId());
         setValue(getValue() + value);
@@ -155,6 +200,13 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
             metrics.setTimeBucket(((Number) converter.get(TIME_BUCKET)).longValue());
             metrics.setServiceId((String) converter.get(InstanceTraffic.SERVICE_ID));
             metrics.setEntityId((String) converter.get(ENTITY_ID));
+
+            metrics.setAttr0((String) converter.get(ATTR0));
+            metrics.setAttr1((String) converter.get(ATTR1));
+            metrics.setAttr2((String) converter.get(ATTR2));
+            metrics.setAttr3((String) converter.get(ATTR3));
+            metrics.setAttr4((String) converter.get(ATTR4));
+            metrics.setAttr5((String) converter.get(ATTR5));
             return metrics;
         }
 
@@ -164,6 +216,13 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
             converter.accept(TIME_BUCKET, storageData.getTimeBucket());
             converter.accept(InstanceTraffic.SERVICE_ID, storageData.getServiceId());
             converter.accept(ENTITY_ID, storageData.getEntityId());
+
+            converter.accept(ATTR0, storageData.getAttr0());
+            converter.accept(ATTR1, storageData.getAttr1());
+            converter.accept(ATTR2, storageData.getAttr2());
+            converter.accept(ATTR3, storageData.getAttr3());
+            converter.accept(ATTR4, storageData.getAttr4());
+            converter.accept(ATTR5, storageData.getAttr5());
         }
     }
 
@@ -183,15 +242,5 @@ public abstract class SumFunction extends Meter implements AcceptableValue<Long>
     @Override
     public int hashCode() {
         return Objects.hash(getEntityId(), getTimeBucket());
-    }
-
-    @Override
-    public boolean haveDefault() {
-        return true;
-    }
-
-    @Override
-    public boolean isDefaultValue() {
-        return value == 0;
     }
 }

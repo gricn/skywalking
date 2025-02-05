@@ -39,11 +39,12 @@ public class BanyanDBEBPFProfilingDataDAO extends AbstractBanyanDBDAO implements
             EBPFProfilingDataRecord.STACK_ID_LIST,
             EBPFProfilingDataRecord.TARGET_TYPE,
             EBPFProfilingDataRecord.DATA_BINARY,
-            EBPFProfilingDataRecord.TASK_ID,
-            EBPFProfilingDataRecord.TIME_BUCKET);
+            EBPFProfilingDataRecord.TASK_ID);
+    private final int profileDataQueryBatchSize;
 
-    public BanyanDBEBPFProfilingDataDAO(BanyanDBStorageClient client) {
+    public BanyanDBEBPFProfilingDataDAO(BanyanDBStorageClient client, int profileDataQueryBatchSize) {
         super(client);
+        this.profileDataQueryBatchSize = profileDataQueryBatchSize;
     }
 
     @Override
@@ -58,6 +59,7 @@ public class BanyanDBEBPFProfilingDataDAO extends AbstractBanyanDBDAO implements
                             query.and(eq(EBPFProfilingDataRecord.SCHEDULE_ID, scheduleId));
                             query.and(gte(EBPFProfilingDataRecord.UPLOAD_TIME, beginTime));
                             query.and(lte(EBPFProfilingDataRecord.UPLOAD_TIME, endTime));
+                            query.setLimit(profileDataQueryBatchSize);
                         }
                     }
             );

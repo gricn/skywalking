@@ -22,9 +22,18 @@ services:
       service: oap
     environment:
       SW_OTEL_RECEIVER: default
-      SW_OTEL_RECEIVER_ENABLED_OC_RULES: vm
+      SW_OTEL_RECEIVER_ENABLED_OTEL_METRICS_RULES: vm
+    volumes:
+      - ./otel-rules/vm.yaml:/skywalking/config/otel-rules/vm.yaml
     ports:
       - 12800
+
+  banyandb:
+    extends:
+      file: ../../../script/docker-compose/base-compose.yml
+      service: banyandb
+    ports:
+      - 17912
 
   vm-service:
     build:
@@ -36,7 +45,7 @@ services:
       - 9100
 
   otel-collector:
-    image: otel/opentelemetry-collector:0.50.0
+    image: otel/opentelemetry-collector:${OTEL_COLLECTOR_VERSION}
     networks:
       - e2e
     command: [ "--config=/etc/otel-collector-config.yaml" ]

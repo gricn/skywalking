@@ -19,14 +19,16 @@
 package org.apache.skywalking.oap.server.storage.plugin.banyandb;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.skywalking.banyandb.common.v1.BanyandbCommon;
+import org.apache.skywalking.banyandb.model.v1.BanyandbModel;
+import org.apache.skywalking.banyandb.property.v1.BanyandbProperty;
 import org.apache.skywalking.banyandb.v1.client.TagAndValue;
-import org.apache.skywalking.banyandb.v1.client.metadata.Property;
+import org.apache.skywalking.banyandb.property.v1.BanyandbProperty.Property;
 import org.apache.skywalking.oap.server.core.management.ui.template.UITemplate;
 import org.apache.skywalking.oap.server.core.query.input.DashboardSetting;
 import org.apache.skywalking.oap.server.core.query.type.DashboardConfiguration;
 import org.apache.skywalking.oap.server.core.query.type.TemplateChangeStatus;
 import org.apache.skywalking.oap.server.core.storage.management.UITemplateManagementDAO;
-import org.apache.skywalking.oap.server.library.util.BooleanUtils;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.AbstractBanyanDBDAO;
 
 import java.io.IOException;
@@ -35,7 +37,7 @@ import java.util.stream.Collectors;
 
 @Slf4j
 public class BanyanDBUITemplateManagementDAO extends AbstractBanyanDBDAO implements UITemplateManagementDAO {
-    private static final String GROUP = "sw";
+    public static final String GROUP = "sw";
 
     public BanyanDBUITemplateManagementDAO(BanyanDBStorageClient client) {
         super(client);
@@ -60,12 +62,12 @@ public class BanyanDBUITemplateManagementDAO extends AbstractBanyanDBDAO impleme
 
     @Override
     public TemplateChangeStatus addTemplate(DashboardSetting setting) {
-        Property newTemplate = convert(setting.toEntity());
+        Property newTemplate = applyAll(setting.toEntity());
         try {
             this.getClient().define(newTemplate);
             return TemplateChangeStatus.builder()
                     .status(true)
-                    .id(newTemplate.id())
+                    .id(newTemplate.getMetadata().getId())
                     .build();
         } catch (IOException ioEx) {
             log.error("fail to add new template", ioEx);
@@ -76,12 +78,12 @@ public class BanyanDBUITemplateManagementDAO extends AbstractBanyanDBDAO impleme
 
     @Override
     public TemplateChangeStatus changeTemplate(DashboardSetting setting) {
-        Property newTemplate = convert(setting.toEntity());
+        Property newTemplate = applyConfiguration(setting.toEntity());
         try {
             this.getClient().define(newTemplate);
             return TemplateChangeStatus.builder()
                     .status(true)
-                    .id(newTemplate.id())
+                    .id(newTemplate.getMetadata().getId())
                     .build();
         } catch (IOException ioEx) {
             log.error("fail to modify the template", ioEx);
@@ -98,16 +100,15 @@ public class BanyanDBUITemplateManagementDAO extends AbstractBanyanDBDAO impleme
                     .build();
         }
         UITemplate uiTemplate = parse(oldProperty);
-        uiTemplate.setDisabled(BooleanUtils.FALSE);
         try {
-            this.getClient().define(convert(uiTemplate));
+            this.getClient().define(applyStatus(uiTemplate));
             return TemplateChangeStatus.builder()
                     .status(true)
-                    .id(uiTemplate.id())
+                    .id(uiTemplate.id().build())
                     .build();
         } catch (IOException ioEx) {
             log.error("fail to disable the template", ioEx);
-            return TemplateChangeStatus.builder().status(false).id(uiTemplate.id()).message("Can't disable the template")
+            return TemplateChangeStatus.builder().status(false).id(uiTemplate.id().build()).message("Can't disable the template")
                     .build();
         }
     }
@@ -120,9 +121,10 @@ public class BanyanDBUITemplateManagementDAO extends AbstractBanyanDBDAO impleme
 
     public UITemplate parse(Property property) {
         UITemplate uiTemplate = new UITemplate();
-        uiTemplate.setTemplateId(property.id());
+        uiTemplate.setTemplateId(property.getMetadata().getId());
 
-        for (TagAndValue<?> tagAndValue : property.tags()) {
+        for (BanyandbModel.Tag tag : property.getTagsList()) {
+            TagAndValue<?> tagAndValue = TagAndValue.fromProtobuf(tag);
             if (tagAndValue.getTagName().equals(UITemplate.CONFIGURATION)) {
                 uiTemplate.setConfiguration((String) tagAndValue.getValue());
             } else if (tagAndValue.getTagName().equals(UITemplate.DISABLED)) {
@@ -134,11 +136,52 @@ public class BanyanDBUITemplateManagementDAO extends AbstractBanyanDBDAO impleme
         return uiTemplate;
     }
 
-    public Property convert(UITemplate uiTemplate) {
-        return Property.create(GROUP, UITemplate.INDEX_NAME, uiTemplate.id())
-                .addTag(TagAndValue.newStringTag(UITemplate.CONFIGURATION, uiTemplate.getConfiguration()))
-                .addTag(TagAndValue.newLongTag(UITemplate.DISABLED, uiTemplate.getDisabled()))
-                .addTag(TagAndValue.newLongTag(UITemplate.UPDATE_TIME, uiTemplate.getUpdateTime()))
-                .build();
+    public Property applyAll(UITemplate uiTemplate) {
+        return Property.newBuilder()
+                .setMetadata(BanyandbProperty.Metadata.newBuilder()
+                        .setId(uiTemplate.id().build())
+                        .setContainer(BanyandbCommon.Metadata.newBuilder()
+                                .setGroup(GROUP)
+                                .setName(UITemplate.INDEX_NAME)))
+            .addTags(TagAndValue.newStringTag(UITemplate.CONFIGURATION, uiTemplate.getConfiguration()).build())
+            .addTags(TagAndValue.newLongTag(UITemplate.DISABLED, uiTemplate.getDisabled()).build())
+            .addTags(TagAndValue.newLongTag(UITemplate.UPDATE_TIME, uiTemplate.getUpdateTime()).build())
+            .build();
+    }
+
+    /**
+     * Partial apply status, i.e. disable tag.
+     *
+     * @param uiTemplate previous UITemplate
+     * @return new property (patch) to be applied
+     */
+    public Property applyStatus(UITemplate uiTemplate) {
+        return Property.newBuilder()
+                .setMetadata(BanyandbProperty.Metadata.newBuilder()
+                        .setId(uiTemplate.id().build())
+                        .setContainer(BanyandbCommon.Metadata.newBuilder()
+                                .setGroup(GROUP)
+                                .setName(UITemplate.INDEX_NAME)))
+                .addTags(TagAndValue.newLongTag(UITemplate.DISABLED, uiTemplate.getDisabled()).build())
+                .addTags(TagAndValue.newLongTag(UITemplate.UPDATE_TIME, uiTemplate.getUpdateTime()).build())
+            .build();
+    }
+
+    /**
+     * Partial apply configuration, i.e. configuration tag.
+     *
+     * @param uiTemplate previous UITemplate
+     * @return new property (patch) to be applied
+     */
+    public Property applyConfiguration(UITemplate uiTemplate) {
+        return Property.newBuilder()
+                .setMetadata(BanyandbProperty.Metadata.newBuilder()
+                        .setId(uiTemplate.id().build())
+                        .setContainer(BanyandbCommon.Metadata.newBuilder()
+                                .setGroup(GROUP)
+                                .setName(UITemplate.INDEX_NAME)))
+                .addTags(TagAndValue.newStringTag(UITemplate.CONFIGURATION, uiTemplate.getConfiguration()).build())
+                .addTags(TagAndValue.newLongTag(UITemplate.UPDATE_TIME, uiTemplate.getUpdateTime()).build())
+            .build();
     }
 }

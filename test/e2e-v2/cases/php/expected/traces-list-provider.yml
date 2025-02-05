@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+debuggingtrace: null
 traces:
 {{- contains .traces }}
 - segmentid: {{ notEmpty .segmentid }}
@@ -22,5 +23,5 @@ traces:
   start: "{{ notEmpty .start}}"
   iserror: false
   traceids:
-    - {{ (index .traceids 0) }}
+    - "{{ (index .traceids 0) }}"
 {{- end }}

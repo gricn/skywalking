@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+debuggingtrace: null
 spans:
 {{- contains .spans }}
   - traceid: {{ notEmpty .traceid }}
@@ -36,6 +37,7 @@ spans:
       - key: url
         value: http://provider:9091/info
     logs: []
+    attachedevents: []
   - traceid: {{ notEmpty .traceid }}
     segmentid: {{ notEmpty .segmentid }}
     spanid: 0
@@ -65,4 +67,5 @@ spans:
       - key: http.status.code
         value: "200"
     logs: []
+    attachedevents: []
 {{- end }}

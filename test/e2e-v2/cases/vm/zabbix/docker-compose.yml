@@ -25,8 +25,15 @@ services:
     ports:
       - 12800
 
+  banyandb:
+    extends:
+      file: ../../../script/docker-compose/base-compose.yml
+      service: banyandb
+    ports:
+      - 17912
+
   zabbix-client:
-    image: zabbix/zabbix-agent:latest
+    image: zabbix/zabbix-agent:alpine-6.4.15
     networks:
       - e2e
     volumes:

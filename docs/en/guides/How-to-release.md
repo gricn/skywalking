@@ -3,86 +3,93 @@ Apache SkyWalking release guide
 If you're a committer, you can learn how to release SkyWalking in The Apache Way and start the voting process by reading this document.
 
 
-## Set up your development environment
-Follow the steps in the [Apache maven deployment environment document](http://www.apache.org/dev/publishing-maven-artifacts.html#dev-env)
-to set gpg tool and encrypt passwords.
+## Prerequisites
+Add your GPG public key into the [SkyWalking GPG KEYS](https://dist.apache.org/repos/dist/release/skywalking/KEYS) file.
+- If you are a PMC member, use your Apache ID and password to log in this svn, and update the file. **Don't override the existing file.**
+- If you are a committer, please ask a PMC member to help you. 
 
-Use the following block as a template and place it in `~/.m2/settings.xml`.
+## Tag for the release
 
-```
-<settings>
-...
-  <servers>
-    <!-- To publish a snapshot of some part of Maven -->
-    <server>
-      <id>apache.snapshots.https</id>
-      <username> <!-- YOUR APACHE LDAP USERNAME --> </username>
-      <password> <!-- YOUR APACHE LDAP PASSWORD (encrypted) --> </password>
-    </server>
-    <!-- To stage a release of some part of Maven -->
-    <server>
-      <id>apache.releases.https</id>
-      <username> <!-- YOUR APACHE LDAP USERNAME --> </username>
-      <password> <!-- YOUR APACHE LDAP PASSWORD (encrypted) --> </password>
-    </server>
-   ...
-  </servers>
-</settings>
+- Set the version number that you are about to release.
+
+```bash
+export RELEASE_VERSION=x.y.z # (example: RELEASE_VERSION=10.1.0)
+export NEXT_RELEASE_VERSION=x.y.z # (example: NEXT_RELEASE_VERSION=10.2.0)
+export PRODUCT_NAME="apache-skywalking-apm"
+export SOURCE_FILE="dist/${PRODUCT_NAME}-${RELEASE_VERSION}.tar.gz"
+export TARGET_DIR="tools/releasing"
 ```
 
-## Add your GPG public key
-1. Add your GPG public key into the [SkyWalking GPG KEYS](https://dist.apache.org/repos/dist/release/skywalking/KEYS) file.
-If you are a committer, use your Apache ID and password to log in this svn, and update the file. **Don't override the existing file.**
-1. Upload your GPG public key to the public GPG site, such as [MIT's site](http://pgp.mit.edu:11371/). This site should be in the
-Apache maven staging repository checklist.
+- Create a new folder for the new release.
 
-## Test your settings
-This step is only for testing purpose. If your env is correctly set, you don't need to check every time.
-```
-./mvnw clean install -Pall (this will build artifacts, sources and sign)
+```bash
+git clone https://github.com/apache/skywalking.git
+cd skywalking
+git checkout -b ${RELEASE_VERSION}-release # Create a branch for new release, such as 10.1.0-release
+git submodule init
+git submodule update
 ```
 
-## Prepare for the release
-```
-./mvnw release:clean
-./mvnw release:prepare -DautoVersionSubmodules=true -Pall
-```
+- Update the property `revision` in `pom.xml` file, and commit it.
 
-- Set version number as x.y.z, and tag as **v**x.y.z (The version tag must start with **v**. You will find out why this is necessary in the next step.)
-
-_You could do a GPG signature before preparing for the release. If you need to input the password to sign, and the maven doesn't provide you with the opportunity to do so, this may lead to failure of the release. To resolve this, you may run `gpg --sign xxx` in any file. This will allow it to remember the password for long enough to prepare for the release._ 
-
-## Stage the release 
-```
-./mvnw release:perform -Dmaven.test.skip -Pall
+```bash
+./mvnw versions:set-property -DgenerateBackupPoms=false -Dproperty=revision -DnewVersion=${RELEASE_VERSION}
+git add pom.xml
+git commit -m "Prepare for release ${RELEASE_VERSION}"
 ```
 
-- The release will be automatically inserted into a temporary staging repository.
+- Tag the commit and push it to the upstream.
 
-## Build and sign the source code package
-```shell
-export RELEASE_VERSION=x.y.z (example: RELEASE_VERSION=5.0.0-alpha)
+```bash
+git tag v${RELEASE_VERSION}
+git push origin v${RELEASE_VERSION}
+```
+
+## Build the binary package
+
+```bash
+./mvnw install package -DskipTests
+mv "$SOURCE_FILE" "$TARGET_DIR/"
+```
+
+The release will be packaged first as `apache-skywalking-apm-x.y.z.tar.gz` in the `{PROJECT_ROOT}/dist` directory, and 
+then moved to the `tools/releasing` directory.
+
+
+## Build the source code package, sign the source code package and binary package
+```bash
 cd tools/releasing
-bash create_source_release.sh
+bash create_release_tars.sh
 ```
 
 This script takes care of the following things:
 1. Use `v` + `RELEASE_VERSION` as tag to clone the codes.
 1. Complete `git submodule init/update`.
 1. Exclude all unnecessary files in the target source tar, such as `.git`, `.github`, and `.gitmodules`. See the script for more details.
-1. Execute `gpg` and `shasum 512`. 
-
+1. Execute `gpg` and `shasum 512` for source tar and binary tar. 
 
 `apache-skywalking-apm-x.y.z-src.tgz` and files ending with `.asc` and `.sha512` may be found in the `tools/releasing` folder.
 
-## Locate and download the distribution package in Apache Nexus Staging repositories
-1. Use your Apache ID to log in to `https://repository.apache.org/`.
-1. Go to `https://repository.apache.org/#stagingRepositories`.
-1. Search `skywalking` and find your staging repository.
-1. Close the repository and wait for all checks to pass. In this step, your GPG KEYS will be checked. See the [set PGP document](#add-your-gpg-public-key),
-if you haven't done it before.
-1. Go to `{REPO_URL}/org/apache/skywalking/apache-skywalking-apm/x.y.z`.
-1. Download `.tar.gz` and `.zip` and files ending with `.asc` and `.sha1`.
+## Start the next iteration
+
+Once the binary and source packages are created, you can start updating the version to the next number and open a pull request.
+
+```bash
+# Update the version to the next snapshot version still in the same branch, such as 10.1.0-release
+./mvnw versions:set-property -DgenerateBackupPoms=false -Dproperty=revision -DnewVersion=${NEXT_RELEASE_VERSION}-SNAPSHOT
+git add pom.xml
+git commit -m "Start next iteration ${NEXT_RELEASE_VERSION}"
+```
+
+Update the change log files for the next iteration.
+* Rename [latest changes](../changes/changes.md) to `changes-{RELEASE_VERSION}.md`.
+* Reset the [latest changes](../changes/changes.md) to the new version.
+* Update Changelog in the `menu.yml` to link to `changes-{RELEASE_VERSION}.md`.
+
+```bash
+git push
+gh pr create --fill # If you have gh cli installed and configured, or open the pull request in https://github.com/apache/skywalking/pulls
+```
 
 
 ## Upload to Apache svn
@@ -93,63 +100,7 @@ if you haven't done it before.
     * See Section "Build and sign the source code package" for more details 
 1. Upload the distribution package to the folder with files ending with `.asc` and `.sha512`.
     * Package name:  `apache-skywalking-bin-x.y.z.tar.gz`.
-    * See Section "Locate and download the distribution package in Apache Nexus Staging repositories" for more details.
     * Create a `.sha512` package: `shasum -a 512 file > file.sha512`
-
-## Make the internal announcements
-Send an announcement mail in dev mail list.
-
-```
-Mail title: [ANNOUNCE] SkyWalking x.y.z test build available
-
-Mail content:
-The test build of x.y.z is available.
-
-We welcome any comments you may have, and will take all feedback into
-account if a quality vote is called for this build.
-
-Release notes:
-
- * https://github.com/apache/skywalking/blob/master/changes/changes-x.y.z.md
-
-Release Candidate:
-
- * https://dist.apache.org/repos/dist/dev/skywalking/xxxx
- * sha512 checksums
-   - sha512xxxxyyyzzz apache-skywalking-apm-x.x.x-src.tgz
-   - sha512xxxxyyyzzz apache-skywalking-apm-bin-x.x.x.tar.gz
-
-Maven 2 staging repository:
-
- * https://repository.apache.org/content/repositories/xxxx/org/apache/skywalking/
-
-Release Tag :
-
- * (Git Tag) x.y.z
-
-Release CommitID :
-
- * https://github.com/apache/skywalking/tree/(Git Commit ID)
- * Git submodule
-   * skywalking-ui: https://github.com/apache/skywalking-booster-ui/tree/(Git Commit ID)
-   * apm-protocol/apm-network/src/main/proto: https://github.com/apache/skywalking-data-collect-protocol/tree/(Git Commit ID)
-   * oap-server/server-query-plugin/query-graphql-plugin/src/main/resources/query-protocol https://github.com/apache/skywalking-query-protocol/tree/(Git Commit ID)
-
-Keys to verify the Release Candidate :
-
- * https://dist.apache.org/repos/dist/release/skywalking/KEYS
-
-Guide to build the release from source :
-
- * https://github.com/apache/skywalking/blob/x.y.z/docs/en/guides/How-to-build.md
-
-A vote regarding the quality of this test build will be initiated
-within the next couple of days.
-```
-
-## Wait for at least 48 hours for test responses
-Any PMC member, committer or contributor can test the release features and provide feedback.
-Based on that, the PMC will decide whether to start the voting process.
 
 ## Call a vote in dev
 Call a vote in `dev@skywalking.apache.org`
@@ -163,7 +114,7 @@ This is a call for vote to release Apache SkyWalking version x.y.z.
 
 Release notes:
 
- * https://github.com/apache/skywalking/blob/master/changes/changes-x.y.z.md
+ * https://github.com/apache/skywalking/blob/master/docs/en/changes/changes-x.y.z.md
 
 Release Candidate:
 
@@ -172,13 +123,9 @@ Release Candidate:
    - sha512xxxxyyyzzz apache-skywalking-apm-x.x.x-src.tgz
    - sha512xxxxyyyzzz apache-skywalking-apm-bin-x.x.x.tar.gz
 
-Maven 2 staging repository:
-
- * https://repository.apache.org/content/repositories/xxxx/org/apache/skywalking/
-
 Release Tag :
 
- * (Git Tag) x.y.z
+ * (Git Tag) vx.y.z
 
 Release CommitID :
 
@@ -194,7 +141,7 @@ Keys to verify the Release Candidate :
 
 Guide to build the release from source :
 
- * https://github.com/apache/skywalking/blob/x.y.z/docs/en/guides/How-to-build.md
+ * https://github.com/apache/skywalking/blob/vx.y.z/docs/en/guides/How-to-build.md
 
 Voting will start now (xxxx date) and will remain open for at least 72 hours, Request all PMC members to give their vote.
 [ ] +1 Release this package.
@@ -206,7 +153,6 @@ Voting will start now (xxxx date) and will remain open for at least 72 hours, Re
 All PMC members and committers should check these before casting +1 votes.
 
 1. Features test.
-1. All artifacts in staging repository are published with `.asc`, `.md5`, and `*sha1` files.
 1. Source code and distribution package (`apache-skywalking-x.y.z-src.tar.gz`, `apache-skywalking-bin-x.y.z.tar.gz`, `apache-skywalking-bin-x.y.z.zip`)
 are found in `https://dist.apache.org/repos/dist/dev/skywalking/x.y.z` with `.asc` and `.sha512`.
 1. `LICENSE` and `NOTICE` are in the source code and distribution package.
@@ -231,15 +177,12 @@ enter your apache password
 ....
 
 ```
-2. Release in the nexus staging repo.
-3. Public download source and distribution tar/zip are located in `http://www.apache.org/dyn/closer.cgi/skywalking/x.y.z/xxx`.
+2. Public download source and distribution tar/zip with asc and sha512 are located in `http://www.apache.org/dyn/closer.cgi/skywalking/x.y.z/xxx`.
 The Apache mirror path is the only release information that we publish.
-4. Public asc and sha512 are located in `https://www.apache.org/dist/skywalking/x.y.z/xxx`.
-5. Public KEYS point to  `https://www.apache.org/dist/skywalking/KEYS`.
-6. Update the website download page. http://skywalking.apache.org/downloads/ . Add a new download source, distribution, sha512, asc, and document
+3. Update the website download page. http://skywalking.apache.org/downloads/ . Add a new download source, distribution, sha512, asc, and document
 links. The links can be found following rules (3) to (6) above.
-7. Add a release event on the website homepage and event page. Announce the public release with changelog or key features.
-8. Send ANNOUNCE email to `dev@skywalking.apache.org`, `announce@apache.org`. The sender should use the Apache email account.
+4. Add a release event on the website homepage and event page. Announce the public release with changelog or key features.
+5. Send ANNOUNCE email to `dev@skywalking.apache.org`, `announce@apache.org`. The sender should use the Apache email account.
 ```
 Mail title: [ANNOUNCE] Apache SkyWalking x.y.z released
 
@@ -249,7 +192,7 @@ Hi all,
 Apache SkyWalking Team is glad to announce the first release of Apache SkyWalking x.y.z.
 
 SkyWalking: APM (application performance monitor) tool for distributed systems,
-especially designed for microservices, cloud native and container-based (Docker, Kubernetes, Mesos) architectures.
+especially designed for microservices, cloud native and container-based architectures.
 
 This release contains a number of new features, bug fixes and improvements compared to
 version a.b.c(last release). The notable changes since x.y.z include:
@@ -260,13 +203,13 @@ version a.b.c(last release). The notable changes since x.y.z include:
 3. ...
 
 Please refer to the change log for the complete list of changes:
-https://github.com/apache/skywalking/blob/master/changes/changes-x.y.z.md
+https://skywalking.apache.org/docs/main/vx.y.z/en/changes/changes/
 
 Apache SkyWalking website:
 http://skywalking.apache.org/
 
 Downloads:
-http://skywalking.apache.org/downloads/
+https://skywalking.apache.org/downloads/#SkyWalkingAPM
 
 Twitter:
 https://twitter.com/ASFSkyWalking
@@ -281,6 +224,10 @@ SkyWalking Resources:
 ```
 
 ## Publish the Docker images
+
+We have a [GitHub workflow](../../../.github/workflows/publish-docker.yaml) to automatically publish the Docker images to
+Docker Hub after you set the version from `pre-release` to `release`, all you need to do is to watch that workflow and see
+whether it succeeds, if it fails, you can use the following steps to publish the Docker images in your local machine.
 
 ```shell
 export SW_VERSION=x.y.z
@@ -302,3 +249,11 @@ make docker.push
 Once the latest release has been published, you should clean up the old releases from the mirror system.
 1. Update the download links (source, dist, asc, and sha512) on the website to the archive repo (https://archive.apache.org/dist/skywalking).
 2. Remove previous releases from https://dist.apache.org/repos/dist/release/skywalking/.
+
+## Update the Quick Start Versions
+
+We hosted the [SkyWalking Quick Start script](https://skywalking.apache.org/docs/main/latest/en/setup/backend/backend-docker/#start-the-storage-oap-and-booster-ui-with-docker-compose), 
+which is a shell script that helps users to download and start SkyWalking quickly.
+The versions of OAP and BanyanDB are hard-coded in the script, so you need to update the versions in the script.
+
+Update the versions [here](https://github.com/apache/skywalking-website/blob/master/content/quickstart-docker.sh#L23-L24)

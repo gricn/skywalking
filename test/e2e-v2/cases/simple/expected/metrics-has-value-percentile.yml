@@ -13,35 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- contains . }}
-- key: 0
-  value:
-  {{- contains .value }}
-  - key: {{ notEmpty .key }}
-    value: {{ ge .value 1 }}
-  {{- end }}
-- key: 1
-  value:
-  {{- contains .value }}
-  - key: {{ notEmpty .key }}
-    value: {{ ge .value 1 }}
-  {{- end }}
-- key: 2
-  value:
-  {{- contains .value }}
-  - key: {{ notEmpty .key }}
-    value: {{ ge .value 1 }}
-  {{- end }}
-- key: 3
-  value:
-  {{- contains .value }}
-  - key: {{ notEmpty .key }}
-    value: {{ ge .value 1 }}
-  {{- end }}
-- key: 4
-  value:
-  {{- contains .value }}
-  - key: {{ notEmpty .key }}
-    value: {{ ge .value 1 }}
-  {{- end }}
-{{- end }}
+debuggingtrace: null
+type: TIME_SERIES_VALUES
+results:
+  {{- contains .results }}
+  - metric:
+      labels:
+        {{- contains .metric.labels }}
+        - key: p
+          value: {{ .value }}
+        {{- end}}
+    values:
+      {{- contains .values }}
+      - id: {{ notEmpty .id }}
+        value: {{ .value }}
+        owner: null
+        traceid: null
+      - id: {{ notEmpty .id }}
+        value: null
+        owner: null
+        traceid: null
+      {{- end}}
+  {{- end}}
+error: null

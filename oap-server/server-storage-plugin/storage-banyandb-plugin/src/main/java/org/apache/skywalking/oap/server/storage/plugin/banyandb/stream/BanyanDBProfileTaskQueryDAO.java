@@ -23,7 +23,8 @@ import org.apache.skywalking.banyandb.v1.client.AbstractQuery;
 import org.apache.skywalking.banyandb.v1.client.RowEntity;
 import org.apache.skywalking.banyandb.v1.client.StreamQuery;
 import org.apache.skywalking.banyandb.v1.client.StreamQueryResponse;
-import org.apache.skywalking.oap.server.core.analysis.metrics.Metrics;
+import org.apache.skywalking.banyandb.v1.client.TimestampRange;
+import org.apache.skywalking.oap.server.core.analysis.TimeBucket;
 import org.apache.skywalking.oap.server.core.profiling.trace.ProfileTaskRecord;
 import org.apache.skywalking.oap.server.core.query.type.ProfileTask;
 import org.apache.skywalking.oap.server.core.storage.profiling.trace.IProfileTaskQueryDAO;
@@ -40,13 +41,13 @@ public class BanyanDBProfileTaskQueryDAO extends AbstractBanyanDBDAO implements 
     private static final Set<String> TAGS = ImmutableSet.of(
             ProfileTaskRecord.SERVICE_ID,
             ProfileTaskRecord.ENDPOINT_NAME,
+            ProfileTaskRecord.TASK_ID,
             ProfileTaskRecord.START_TIME,
             ProfileTaskRecord.CREATE_TIME,
             ProfileTaskRecord.DURATION,
             ProfileTaskRecord.MIN_DURATION_THRESHOLD,
             ProfileTaskRecord.DUMP_PERIOD,
-            ProfileTaskRecord.MAX_SAMPLING_COUNT,
-            Metrics.TIME_BUCKET
+            ProfileTaskRecord.MAX_SAMPLING_COUNT
     );
 
     private final int queryMaxSize;
@@ -58,7 +59,15 @@ public class BanyanDBProfileTaskQueryDAO extends AbstractBanyanDBDAO implements 
 
     @Override
     public List<ProfileTask> getTaskList(String serviceId, String endpointName, Long startTimeBucket, Long endTimeBucket, Integer limit) throws IOException {
-        StreamQueryResponse resp = query(ProfileTaskRecord.INDEX_NAME, TAGS,
+        long startTS = LOWER_BOUND_TIME;
+        long endTS = UPPER_BOUND_TIME;
+        if (startTimeBucket != null) {
+            startTS = TimeBucket.getTimestamp(startTimeBucket);
+        }
+        if (endTimeBucket != null) {
+            endTS = TimeBucket.getTimestamp(endTimeBucket);
+        }
+        StreamQueryResponse resp = query(ProfileTaskRecord.INDEX_NAME, TAGS, new TimestampRange(startTS, endTS),
                 new QueryBuilder<StreamQuery>() {
                     @Override
                     protected void apply(StreamQuery query) {
@@ -68,18 +77,13 @@ public class BanyanDBProfileTaskQueryDAO extends AbstractBanyanDBDAO implements 
                         if (StringUtil.isNotEmpty(endpointName)) {
                             query.and(eq(ProfileTaskRecord.ENDPOINT_NAME, endpointName));
                         }
-                        if (startTimeBucket != null) {
-                            query.and(gte(Metrics.TIME_BUCKET, startTimeBucket));
-                        }
-                        if (endTimeBucket != null) {
-                            query.and(lte(Metrics.TIME_BUCKET, endTimeBucket));
-                        }
+
                         if (limit != null) {
                             query.setLimit(limit);
                         } else {
                             query.setLimit(BanyanDBProfileTaskQueryDAO.this.queryMaxSize);
                         }
-                        query.setOrderBy(new AbstractQuery.OrderBy(ProfileTaskRecord.START_TIME, AbstractQuery.Sort.DESC));
+                        query.setOrderBy(new AbstractQuery.OrderBy(AbstractQuery.Sort.DESC));
                     }
                 });
 
@@ -102,9 +106,9 @@ public class BanyanDBProfileTaskQueryDAO extends AbstractBanyanDBDAO implements 
                     @Override
                     protected void apply(StreamQuery query) {
                         if (StringUtil.isNotEmpty(id)) {
-                            // TODO: support search by ID
+                            query.and(eq(ProfileTaskRecord.TASK_ID, id));
                         }
-                        // query.setLimit(1);
+                        query.setLimit(1);
                     }
                 });
 
@@ -112,13 +116,12 @@ public class BanyanDBProfileTaskQueryDAO extends AbstractBanyanDBDAO implements 
             return null;
         }
 
-        RowEntity first = resp.getElements().stream().filter(e -> id.equals(e.getId())).findFirst().orElse(null);
-        return first == null ? null : buildProfileTask(first);
+        return buildProfileTask(resp.getElements().get(0));
     }
 
     private ProfileTask buildProfileTask(RowEntity data) {
         return ProfileTask.builder()
-                .id(data.getId())
+                .id(data.getTagValue(ProfileTaskRecord.TASK_ID))
                 .serviceId(data.getTagValue(ProfileTaskRecord.SERVICE_ID))
                 .endpointName(data.getTagValue(ProfileTaskRecord.ENDPOINT_NAME))
                 .startTime(((Number) data.getTagValue(ProfileTaskRecord.START_TIME)).longValue())

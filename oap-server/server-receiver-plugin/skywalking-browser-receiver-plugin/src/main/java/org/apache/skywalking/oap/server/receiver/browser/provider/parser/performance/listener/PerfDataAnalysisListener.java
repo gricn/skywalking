@@ -17,12 +17,12 @@
 
 package org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.listener;
 
-import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.BrowserPerfDataDecorator;
+import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.decorators.BrowserPerfDecorator;
 
 /**
  * BrowserPerfDataListener represents the callback when OAP does the browser performance data analysis.
  */
-public interface PerfDataAnalysisListener {
+public interface PerfDataAnalysisListener<T extends BrowserPerfDecorator> {
     /**
      * The last step of the analysis process. Typically, the implementations forward the analysis results to the source
      * receiver.
@@ -32,5 +32,5 @@ public interface PerfDataAnalysisListener {
     /**
      * Parse the raw data from the probe (js-client).
      */
-    void parse(BrowserPerfDataDecorator decorator);
+    void parse(T decorator);
 }

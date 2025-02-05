@@ -23,8 +23,9 @@ import lombok.Setter;
 import org.apache.skywalking.oap.server.core.analysis.metrics.annotation.ConstOne;
 import org.apache.skywalking.oap.server.core.analysis.metrics.annotation.Entrance;
 import org.apache.skywalking.oap.server.core.analysis.metrics.annotation.MetricsFunction;
-import org.apache.skywalking.oap.server.core.query.sql.Function;
+import org.apache.skywalking.oap.server.core.storage.annotation.BanyanDB;
 import org.apache.skywalking.oap.server.core.storage.annotation.Column;
+import org.apache.skywalking.oap.server.core.storage.annotation.ElasticSearch;
 
 @MetricsFunction(functionName = "cpm")
 public abstract class CPMMetrics extends Metrics implements LongValueHolder {
@@ -34,11 +35,14 @@ public abstract class CPMMetrics extends Metrics implements LongValueHolder {
 
     @Getter
     @Setter
-    @Column(columnName = VALUE, dataType = Column.ValueDataType.COMMON_VALUE, function = Function.Avg)
+    @ElasticSearch.EnableDocValues
+    @Column(name = VALUE, dataType = Column.ValueDataType.COMMON_VALUE)
+    @BanyanDB.MeasureField
     private long value;
     @Getter
     @Setter
-    @Column(columnName = TOTAL, storageOnly = true)
+    @Column(name = TOTAL, storageOnly = true)
+    @BanyanDB.MeasureField
     private long total;
 
     @Entrance
@@ -56,16 +60,6 @@ public abstract class CPMMetrics extends Metrics implements LongValueHolder {
     @Override
     public void calculate() {
         this.value = total / getDurationInMinute();
-    }
-
-    @Override
-    public boolean haveDefault() {
-        return true;
-    }
-
-    @Override
-    public boolean isDefaultValue() {
-        return value == 0;
     }
 }
 

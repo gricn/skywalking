@@ -30,6 +30,8 @@ import org.apache.skywalking.oap.server.core.analysis.metrics.Metrics;
 import org.apache.skywalking.oap.server.core.analysis.worker.MetricsStreamProcessor;
 import org.apache.skywalking.oap.server.core.remote.grpc.proto.RemoteData;
 import org.apache.skywalking.oap.server.core.source.DefaultScopeDefine;
+import org.apache.skywalking.oap.server.core.storage.StorageID;
+import org.apache.skywalking.oap.server.core.storage.annotation.BanyanDB;
 import org.apache.skywalking.oap.server.core.storage.annotation.Column;
 import org.apache.skywalking.oap.server.core.storage.annotation.ElasticSearch;
 import org.apache.skywalking.oap.server.core.storage.type.Convert2Entity;
@@ -38,37 +40,58 @@ import org.apache.skywalking.oap.server.core.storage.type.StorageBuilder;
 
 @Stream(name = EndpointTraffic.INDEX_NAME, scopeId = DefaultScopeDefine.ENDPOINT,
     builder = EndpointTraffic.Builder.class, processor = MetricsStreamProcessor.class)
-@MetricsExtension(supportDownSampling = false, supportUpdate = false)
-@EqualsAndHashCode
+@MetricsExtension(supportDownSampling = false, supportUpdate = true)
+@EqualsAndHashCode(of = {
+    "serviceId",
+    "name"
+})
+@BanyanDB.IndexMode
 public class EndpointTraffic extends Metrics {
 
     public static final String INDEX_NAME = "endpoint_traffic";
 
     public static final String SERVICE_ID = "service_id";
-    public static final String NAME = "name";
+    public static final String NAME = "endpoint_traffic_name";
+    public static final String LAST_PING_TIME_BUCKET = "last_ping";
 
     @Setter
     @Getter
-    @Column(columnName = SERVICE_ID)
+    @Column(name = SERVICE_ID)
+    @BanyanDB.SeriesID(index = 0)
     private String serviceId;
     @Setter
     @Getter
-    @Column(columnName = NAME)
+    @Column(name = NAME)
+    @ElasticSearch.Column(legacyName = "name")
     @ElasticSearch.MatchQuery
+    @BanyanDB.MatchQuery(analyzer = BanyanDB.MatchQuery.AnalyzerType.URL)
+    @BanyanDB.SeriesID(index = 1)
     private String name = Const.EMPTY_STRING;
+    @Setter
+    @Getter
+    @Column(name = LAST_PING_TIME_BUCKET)
+    private long lastPingTimestamp;
 
     @Override
-    protected String id0() {
+    protected StorageID id0() {
         // Downgrade the time bucket to day level only.
         // supportDownSampling == false for this entity.
-        return IDManager.EndpointID.buildId(
-            this.getServiceId(), this.getName());
+        return new StorageID()
+            .appendMutant(
+                new String[] {
+                    SERVICE_ID,
+                    NAME
+                },
+                IDManager.EndpointID.buildId(
+                    this.getServiceId(), this.getName())
+            );
     }
 
     @Override
     public RemoteData.Builder serialize() {
         RemoteData.Builder remoteBuilder = RemoteData.newBuilder();
         remoteBuilder.addDataLongs(getTimeBucket());
+        remoteBuilder.addDataLongs(getLastPingTimestamp());
 
         remoteBuilder.addDataStrings(serviceId);
         remoteBuilder.addDataStrings(Strings.isNullOrEmpty(name) ? Const.EMPTY_STRING : name);
@@ -78,6 +101,7 @@ public class EndpointTraffic extends Metrics {
     @Override
     public void deserialize(RemoteData remoteData) {
         setTimeBucket(remoteData.getDataLongs(0));
+        setLastPingTimestamp(remoteData.getDataLongs(1));
 
         setServiceId(remoteData.getDataStrings(0));
         setName(remoteData.getDataStrings(1));
@@ -95,6 +119,7 @@ public class EndpointTraffic extends Metrics {
             inventory.setServiceId((String) converter.get(SERVICE_ID));
             inventory.setName((String) converter.get(NAME));
             inventory.setTimeBucket(((Number) converter.get(TIME_BUCKET)).longValue());
+            inventory.setLastPingTimestamp(((Number) converter.get(LAST_PING_TIME_BUCKET)).longValue());
             return inventory;
         }
 
@@ -103,11 +128,14 @@ public class EndpointTraffic extends Metrics {
             converter.accept(SERVICE_ID, storageData.getServiceId());
             converter.accept(NAME, storageData.getName());
             converter.accept(TIME_BUCKET, storageData.getTimeBucket());
+            converter.accept(LAST_PING_TIME_BUCKET, storageData.getLastPingTimestamp());
         }
     }
 
     @Override
     public boolean combine(final Metrics metrics) {
+        final EndpointTraffic endpointTraffic = (EndpointTraffic) metrics;
+        this.lastPingTimestamp = endpointTraffic.getLastPingTimestamp();
         return true;
     }
 

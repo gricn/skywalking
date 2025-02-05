@@ -31,15 +31,14 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
-
 import lombok.extern.slf4j.Slf4j;
-import org.apache.skywalking.oap.server.library.util.StringUtil;
 import org.apache.skywalking.oap.server.configuration.api.ConfigTable;
-import org.apache.skywalking.oap.server.configuration.api.ConfigWatcherRegister;
+import org.apache.skywalking.oap.server.configuration.api.FetchingConfigWatcherRegister;
 import org.apache.skywalking.oap.server.configuration.api.GroupConfigTable;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
 
 @Slf4j
-public class NacosConfigWatcherRegister extends ConfigWatcherRegister {
+public class NacosConfigWatcherRegister extends FetchingConfigWatcherRegister {
     private final NacosServerSettings settings;
     private final ConfigService configService;
     private final Map<String, Optional<String>> configItemKeyedByName;
@@ -58,6 +57,9 @@ public class NacosConfigWatcherRegister extends ConfigWatcherRegister {
         final Properties properties = new Properties();
         properties.put(PropertyKeyConst.SERVER_ADDR, serverAddr + ":" + port);
         properties.put(PropertyKeyConst.NAMESPACE, settings.getNamespace());
+        if (StringUtil.isNotEmpty(settings.getContextPath())) {
+            properties.put(PropertyKeyConst.CONTEXT_PATH, settings.getContextPath());
+        }
         if (StringUtil.isNotEmpty(settings.getUsername())) {
             properties.put(PropertyKeyConst.USERNAME, settings.getUsername());
             properties.put(PropertyKeyConst.PASSWORD, settings.getPassword());

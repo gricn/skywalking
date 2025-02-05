@@ -18,9 +18,11 @@
 
 package org.apache.skywalking.oap.server.receiver.envoy;
 
+import com.google.common.collect.ImmutableMap;
 import io.envoyproxy.envoy.service.metrics.v2.MetricsServiceGrpc;
 import io.envoyproxy.envoy.service.metrics.v3.StreamMetricsMessage;
 import io.envoyproxy.envoy.service.metrics.v3.StreamMetricsResponse;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import io.prometheus.client.Metrics;
 import java.util.ArrayList;
@@ -30,6 +32,8 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.skywalking.oap.meter.analyzer.MetricConvert;
+import org.apache.skywalking.oap.meter.analyzer.dsl.SampleFamily;
 import org.apache.skywalking.oap.server.library.util.StringUtil;
 import org.apache.skywalking.oap.meter.analyzer.prometheus.PrometheusMetricConverter;
 import org.apache.skywalking.oap.server.core.CoreModule;
@@ -49,7 +53,7 @@ import org.apache.skywalking.oap.server.telemetry.api.MetricsTag;
 public class MetricServiceGRPCHandler extends MetricsServiceGrpc.MetricsServiceImplBase {
     private final CounterMetrics counter;
     private final HistogramMetrics histogram;
-    private final List<PrometheusMetricConverter> converters;
+    private final List<MetricConvert> converters;
 
     private final EnvoyMetricReceiverConfig config;
 
@@ -73,7 +77,7 @@ public class MetricServiceGRPCHandler extends MetricsServiceGrpc.MetricsServiceI
 
         converters = config.rules()
                            .stream()
-                           .map(rule -> new PrometheusMetricConverter(rule, meterSystem))
+                           .map(rule -> new MetricConvert(rule, meterSystem))
                            .collect(Collectors.toList());
     }
 
@@ -122,13 +126,24 @@ public class MetricServiceGRPCHandler extends MetricsServiceGrpc.MetricsServiceI
                         }
                     }
                     groupingMetrics.forEach(
-                        (name, metrics) ->
-                            converters.forEach(converter -> converter.toMeter(metrics.stream())));
+                        (name, metrics) -> {
+                            ImmutableMap<String, SampleFamily> sampleFamilies = PrometheusMetricConverter
+                                .convertPromMetricToSampleFamily(metrics.stream());
+                            converters.forEach(converter -> converter.toMeter(sampleFamilies));
+                        }
+                    );
                 }
             }
 
             @Override
             public void onError(Throwable throwable) {
+                Status status = Status.fromThrowable(throwable);
+                if (Status.CANCELLED.getCode() == status.getCode()) {
+                    if (log.isDebugEnabled()) {
+                        log.error("Envoy client cancelled sending metrics", throwable);
+                    }
+                    return;
+                }
                 log.error("Error in receiving metrics from envoy", throwable);
             }
 

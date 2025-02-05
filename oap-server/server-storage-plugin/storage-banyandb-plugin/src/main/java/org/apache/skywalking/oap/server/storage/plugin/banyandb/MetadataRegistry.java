@@ -19,31 +19,47 @@
 package org.apache.skywalking.oap.server.storage.plugin.banyandb;
 
 import com.google.gson.JsonObject;
-import io.grpc.Status;
 import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Singular;
+import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.skywalking.banyandb.v1.client.BanyanDBClient;
-import org.apache.skywalking.banyandb.v1.client.grpc.exception.BanyanDBException;
-import org.apache.skywalking.banyandb.v1.client.metadata.Catalog;
+import org.apache.skywalking.banyandb.common.v1.BanyandbCommon;
+import org.apache.skywalking.banyandb.common.v1.BanyandbCommon.Metadata;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.CompressionMethod;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.EncodingMethod;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.FieldSpec;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.FieldType;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.IndexRule;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.Measure;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.Stream;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.TagFamilySpec;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.TagSpec;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.TagType;
+import org.apache.skywalking.banyandb.database.v1.BanyandbDatabase.TopNAggregation;
+import org.apache.skywalking.banyandb.model.v1.BanyandbModel;
 import org.apache.skywalking.banyandb.v1.client.metadata.Duration;
-import org.apache.skywalking.banyandb.v1.client.metadata.Group;
-import org.apache.skywalking.banyandb.v1.client.metadata.IndexRule;
-import org.apache.skywalking.banyandb.v1.client.metadata.Measure;
-import org.apache.skywalking.banyandb.v1.client.metadata.NamedSchema;
-import org.apache.skywalking.banyandb.v1.client.metadata.Stream;
-import org.apache.skywalking.banyandb.v1.client.metadata.TagFamilySpec;
 import org.apache.skywalking.oap.server.core.analysis.DownSampling;
 import org.apache.skywalking.oap.server.core.analysis.metrics.IntList;
+import org.apache.skywalking.oap.server.core.analysis.metrics.Metrics;
+import org.apache.skywalking.oap.server.core.analysis.record.Record;
+import org.apache.skywalking.oap.server.core.config.DownSamplingConfigService;
+import org.apache.skywalking.oap.server.core.query.enumeration.Step;
+import org.apache.skywalking.oap.server.core.storage.StorageException;
+import org.apache.skywalking.oap.server.core.storage.annotation.BanyanDB;
+import org.apache.skywalking.oap.server.core.storage.annotation.Column;
 import org.apache.skywalking.oap.server.core.storage.annotation.ValueColumnMetadata;
 import org.apache.skywalking.oap.server.core.storage.model.Model;
 import org.apache.skywalking.oap.server.core.storage.model.ModelColumn;
 import org.apache.skywalking.oap.server.core.storage.type.StorageDataComplexObject;
+import org.apache.skywalking.oap.server.library.util.CollectionUtils;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.lang.reflect.ParameterizedType;
 import java.util.ArrayList;
@@ -63,83 +79,198 @@ public enum MetadataRegistry {
 
     private final Map<String, Schema> registry = new HashMap<>();
 
-    public NamedSchema<?> registerModel(Model model, BanyanDBStorageConfig config) {
-        final SchemaMetadata schemaMetadata = parseMetadata(model, config);
+    public StreamModel registerStreamModel(Model model, BanyanDBStorageConfig config, DownSamplingConfigService configService) {
+        final SchemaMetadata schemaMetadata = parseMetadata(model, config, configService);
         Schema.SchemaBuilder schemaBuilder = Schema.builder().metadata(schemaMetadata);
         Map<String, ModelColumn> modelColumnMap = model.getColumns().stream()
                 .collect(Collectors.toMap(modelColumn -> modelColumn.getColumnName().getStorageName(), Function.identity()));
-        // parse and set sharding keys
-        List<String> entities = parseEntityNames(modelColumnMap);
+        // parse and set seriesIDs
+        List<String> seriesIDColumns = parseEntityNames(modelColumnMap);
+        if (seriesIDColumns.isEmpty()) {
+            throw new IllegalStateException("seriesID of model[stream." + model.getName() + "] must not be empty");
+        }
         // parse tag metadata
         // this can be used to build both
         // 1) a list of TagFamilySpec,
         // 2) a list of IndexRule,
-        List<TagMetadata> tags = parseTagMetadata(model, schemaBuilder);
-        List<TagFamilySpec> tagFamilySpecs = schemaMetadata.extractTagFamilySpec(tags);
+        List<TagMetadata> tags = parseTagMetadata(model, schemaBuilder, seriesIDColumns, schemaMetadata.group);
+        List<TagFamilySpec> tagFamilySpecs = schemaMetadata.extractTagFamilySpec(tags, false);
         // iterate over tagFamilySpecs to save tag names
         for (final TagFamilySpec tagFamilySpec : tagFamilySpecs) {
-            for (final TagFamilySpec.TagSpec tagSpec : tagFamilySpec.tagSpecs()) {
-                schemaBuilder.tag(tagSpec.getTagName());
+            for (final TagSpec tagSpec : tagFamilySpec.getTagsList()) {
+                schemaBuilder.tag(tagSpec.getName());
             }
         }
+        String timestampColumn4Stream = model.getBanyanDBModelExtension().getTimestampColumn();
+        if (StringUtil.isBlank(timestampColumn4Stream)) {
+            throw new IllegalStateException(
+                    "Model[stream." + model.getName() + "] miss defined @BanyanDB.TimestampColumn");
+        }
+        schemaBuilder.timestampColumn4Stream(timestampColumn4Stream);
         List<IndexRule> indexRules = tags.stream()
                 .map(TagMetadata::getIndexRule)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
 
-        if (schemaMetadata.getKind() == Kind.STREAM) {
-            final Stream.Builder builder = Stream.create(schemaMetadata.getGroup(), schemaMetadata.getName());
-            if (entities.isEmpty()) {
-                throw new IllegalStateException("sharding keys of model[stream." + model.getName() + "] must not be empty");
+        final Stream.Builder builder = Stream.newBuilder();
+        builder.setMetadata(BanyandbCommon.Metadata.newBuilder().setGroup(schemaMetadata.getGroup())
+                .setName(schemaMetadata.name()));
+        builder.setEntity(BanyandbDatabase.Entity.newBuilder().addAllTagNames(seriesIDColumns));
+        builder.addAllTagFamilies(tagFamilySpecs);
+
+        registry.put(schemaMetadata.name(), schemaBuilder.build());
+        return new StreamModel(builder.build(), indexRules);
+    }
+
+    public MeasureModel registerMeasureModel(Model model, BanyanDBStorageConfig config, DownSamplingConfigService configService) throws StorageException {
+        final SchemaMetadata schemaMetadata = parseMetadata(model, config, configService);
+        Schema.SchemaBuilder schemaBuilder = Schema.builder().metadata(schemaMetadata);
+        Map<String, ModelColumn> modelColumnMap = model.getColumns().stream()
+                .collect(Collectors.toMap(modelColumn -> modelColumn.getColumnName().getStorageName(), Function.identity()));
+        // parse and set seriesIDs
+        List<String> seriesIDColumns = parseEntityNames(modelColumnMap);
+        if (seriesIDColumns.isEmpty()) {
+            throw new StorageException("model " + model.getName() + " doesn't contain series id");
+        }
+        // parse tag metadata
+        // this can be used to build both
+        // 1) a list of TagFamilySpec,
+        // 2) a list of IndexRule,
+        MeasureMetadata tagsAndFields = parseTagAndFieldMetadata(model, schemaBuilder, seriesIDColumns, schemaMetadata.group);
+        List<TagFamilySpec> tagFamilySpecs = schemaMetadata.extractTagFamilySpec(tagsAndFields.tags, model.getBanyanDBModelExtension().isStoreIDTag());
+        // iterate over tagFamilySpecs to save tag names
+        for (final TagFamilySpec tagFamilySpec : tagFamilySpecs) {
+            for (final TagSpec tagSpec : tagFamilySpec.getTagsList()) {
+                schemaBuilder.tag(tagSpec.getName());
             }
-            builder.setEntityRelativeTags(entities);
-            builder.addTagFamilies(tagFamilySpecs);
-            builder.addIndexes(indexRules);
-            registry.put(model.getName(), schemaBuilder.build());
-            return builder.build();
-        } else {
-            final Measure.Builder builder = Measure.create(schemaMetadata.getGroup(), schemaMetadata.getName(),
-                    downSamplingDuration(model.getDownsampling()));
-            if (entities.isEmpty()) { // if shardingKeys is empty, for measure, we can use ID as a single sharding key.
-                builder.setEntityRelativeTags(Measure.ID);
-            } else {
-                builder.setEntityRelativeTags(entities);
+        }
+        List<IndexRule> indexRules = tagsAndFields.tags.stream()
+                .map(TagMetadata::getIndexRule)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+
+        if (model.getBanyanDBModelExtension().isStoreIDTag()) {
+            indexRules.add(indexRule(schemaMetadata.group, BanyanDBConverter.ID, false, null));
+        }
+
+        final Measure.Builder builder = Measure.newBuilder();
+        builder.setMetadata(BanyandbCommon.Metadata.newBuilder().setGroup(schemaMetadata.getGroup())
+                .setName(schemaMetadata.name()));
+        builder.setInterval(downSamplingDuration(model.getDownsampling()).format());
+        builder.setEntity(BanyandbDatabase.Entity.newBuilder().addAllTagNames(seriesIDColumns));
+        builder.addAllTagFamilies(tagFamilySpecs);
+        if (model.getBanyanDBModelExtension().isIndexMode()) {
+            builder.setIndexMode(true);
+            if (!tagsAndFields.fields.isEmpty()) {
+                throw new StorageException("index mode is enabled, but fields are defined");
             }
-            builder.addTagFamilies(tagFamilySpecs);
-            builder.addIndexes(indexRules);
-            // parse and set field
-            Optional<ValueColumnMetadata.ValueColumn> valueColumnOpt = ValueColumnMetadata.INSTANCE
-                    .readValueColumnDefinition(model.getName());
-            valueColumnOpt.ifPresent(valueColumn -> builder.addField(parseFieldSpec(modelColumnMap.get(valueColumn.getValueCName()), valueColumn)));
-            valueColumnOpt.ifPresent(valueColumn -> schemaBuilder.field(valueColumn.getValueCName()));
-            registry.put(model.getName(), schemaBuilder.build());
-            return builder.build();
+        }
+        // parse and set field
+        for (BanyandbDatabase.FieldSpec field : tagsAndFields.fields) {
+            builder.addFields(field);
+            schemaBuilder.field(field.getName());
+        }
+        // parse TopN
+        schemaBuilder.topNSpec(parseTopNSpec(model, schemaMetadata.group, schemaMetadata.name()));
+
+        registry.put(schemaMetadata.name(), schemaBuilder.build());
+        return new MeasureModel(builder.build(), indexRules);
+    }
+
+    private TopNAggregation parseTopNSpec(final Model model, final String group, final String measureName)
+            throws StorageException {
+        if (model.getBanyanDBModelExtension().getTopN() == null) {
+            return null;
+        }
+
+        final Optional<ValueColumnMetadata.ValueColumn> valueColumnOpt = ValueColumnMetadata.INSTANCE.readValueColumnDefinition(model.getName());
+        if (valueColumnOpt.isEmpty() || valueColumnOpt.get().getDataType() != Column.ValueDataType.COMMON_VALUE) {
+            // skip non-single valued metrics
+            return null;
+        }
+
+        if (CollectionUtils.isEmpty(model.getBanyanDBModelExtension().getTopN().getGroupByTagNames())) {
+            throw new StorageException("invalid groupBy tags: " + model.getBanyanDBModelExtension().getTopN().getGroupByTagNames());
+        }
+        return TopNAggregation.newBuilder()
+                              .setMetadata(
+                                  Metadata.newBuilder().setGroup(group).setName(Schema.formatTopNName(measureName)))
+                              .setSourceMeasure(Metadata.newBuilder().setGroup(group).setName(measureName))
+                              .setFieldValueSort(BanyandbModel.Sort.SORT_UNSPECIFIED) // include both TopN and BottomN
+                              .setFieldName(valueColumnOpt.get().getValueCName())
+                              .addAllGroupByTagNames(model.getBanyanDBModelExtension().getTopN().getGroupByTagNames())
+                              .setCountersNumber(model.getBanyanDBModelExtension().getTopN().getCountersNumber())
+                              .setLruSize(model.getBanyanDBModelExtension().getTopN().getLruSize())
+                              .build();
+    }
+
+    public Schema findMetadata(final Model model) {
+        if (model.isRecord()) {
+            return findRecordMetadata(model.getName());
+        }
+        return findMetadata(model.getName(), model.getDownsampling());
+    }
+
+    public Schema findRecordMetadata(final String recordModelName) {
+        final Schema s = this.registry.get(recordModelName);
+        if (s == null) {
+            return null;
+        }
+        // impose sanity check
+        if (s.getMetadata().getKind() != Kind.STREAM) {
+            throw new IllegalArgumentException(recordModelName + "is not a record");
+        }
+        return s;
+    }
+
+    static DownSampling deriveFromStep(Step step) {
+        switch (step) {
+            case DAY:
+                return DownSampling.Day;
+            case HOUR:
+                return DownSampling.Hour;
+            case SECOND:
+                return DownSampling.Second;
+            default:
+                return DownSampling.Minute;
         }
     }
 
-    public Schema findMetadata(final String name) {
-        return this.registry.get(name);
+    public Schema findMetadata(final String modelName, Step step) {
+        return findMetadata(modelName, deriveFromStep(step));
     }
 
-    private Measure.FieldSpec parseFieldSpec(ModelColumn modelColumn, ValueColumnMetadata.ValueColumn valueColumn) {
+    /**
+     * Find metadata with down-sampling
+     */
+    public Schema findMetadata(final String modelName, DownSampling downSampling) {
+        return this.registry.get(SchemaMetadata.formatName(modelName, downSampling));
+    }
+
+    private FieldSpec parseFieldSpec(ModelColumn modelColumn) {
+        String colName = modelColumn.getColumnName().getStorageName();
         if (String.class.equals(modelColumn.getType())) {
-            return Measure.FieldSpec.newIntField(valueColumn.getValueCName())
-                    .compressWithZSTD()
+            return FieldSpec.newBuilder().setName(colName)
+                    .setFieldType(FieldType.FIELD_TYPE_STRING)
+                    .setCompressionMethod(CompressionMethod.COMPRESSION_METHOD_ZSTD)
                     .build();
         } else if (long.class.equals(modelColumn.getType()) || int.class.equals(modelColumn.getType())) {
-            return Measure.FieldSpec.newIntField(valueColumn.getValueCName())
-                    .compressWithZSTD()
-                    .encodeWithGorilla()
+            return FieldSpec.newBuilder().setName(colName)
+                    .setFieldType(FieldType.FIELD_TYPE_INT)
+                    .setCompressionMethod(CompressionMethod.COMPRESSION_METHOD_ZSTD)
+                    .setEncodingMethod(EncodingMethod.ENCODING_METHOD_GORILLA)
                     .build();
-        } else if (StorageDataComplexObject.class.isAssignableFrom(modelColumn.getType())) {
-            return Measure.FieldSpec.newStringField(valueColumn.getValueCName())
-                    .compressWithZSTD()
+        } else if (StorageDataComplexObject.class.isAssignableFrom(modelColumn.getType()) || JsonObject.class.equals(modelColumn.getType())) {
+            return FieldSpec.newBuilder().setName(colName)
+                    .setFieldType(FieldType.FIELD_TYPE_STRING)
+                    .setCompressionMethod(CompressionMethod.COMPRESSION_METHOD_ZSTD)
                     .build();
         } else if (double.class.equals(modelColumn.getType())) {
             // TODO: natively support double/float in BanyanDB
             log.warn("Double is stored as binary");
-            return Measure.FieldSpec.newBinaryField(valueColumn.getValueCName())
-                    .compressWithZSTD()
+            return FieldSpec.newBuilder().setName(colName)
+                    .setFieldType(FieldType.FIELD_TYPE_DATA_BINARY)
+                    .setCompressionMethod(CompressionMethod.COMPRESSION_METHOD_ZSTD)
                     .build();
         } else {
             throw new UnsupportedOperationException(modelColumn.getType().getSimpleName() + " is not supported for field");
@@ -153,64 +284,85 @@ public enum MetadataRegistry {
             case Minute:
                 return Duration.ofMinutes(1);
             case Day:
-                return Duration.ofDays(1);
+                return Duration.ofHours(24);
             default:
                 throw new UnsupportedOperationException("unsupported downSampling interval");
         }
     }
 
-    IndexRule parseIndexRule(String tagName, ModelColumn modelColumn) {
-        // TODO: we need to add support index type in the OAP core
-        // Currently, we only register INVERTED type
-        // if it is null, it must be a user-defined tag
-        if (modelColumn == null) {
-            return IndexRule.create(tagName, IndexRule.IndexType.INVERTED, IndexRule.IndexLocation.SERIES);
+    IndexRule indexRule(String group, String tagName, boolean enableSort,  BanyanDB.MatchQuery.AnalyzerType analyzer) {
+        IndexRule.Builder builder = IndexRule.newBuilder()
+                                             .setMetadata(Metadata.newBuilder().setName(tagName).setGroup(group))
+                                             .setType(IndexRule.Type.TYPE_INVERTED).addTags(tagName);
+        // *Notice*: here is a reverse logic, if enableSort is true, then setNoSort is false
+        builder.setNoSort(!enableSort);
+        if (analyzer != null) {
+            switch (analyzer) {
+                case KEYWORD:
+                    builder.setAnalyzer("keyword");
+                    break;
+                case STANDARD:
+                    builder.setAnalyzer("standard");
+                    break;
+                case SIMPLE:
+                    builder.setAnalyzer("simple");
+                    break;
+                case URL:
+                    builder.setAnalyzer("url");
+                    break;
+                default:
+                    throw new UnsupportedOperationException("unsupported analyzer type: " + analyzer);
+            }
         }
-        if (modelColumn.getBanyanDBExtension().isGlobalIndexing()) {
-            return IndexRule.create(tagName, IndexRule.IndexType.INVERTED, IndexRule.IndexLocation.GLOBAL);
-        } else {
-            return IndexRule.create(tagName, IndexRule.IndexType.INVERTED, IndexRule.IndexLocation.SERIES);
-        }
+        return builder.build();
     }
 
     /**
-     * Parse sharding keys from the {@link Model}
+     * Parse SeriesID from the {@link Model}
      *
      * @param modelColumnMap the mapping between column storageName and {@link ModelColumn}
      * @return a list of column names in strict order
      */
     List<String> parseEntityNames(Map<String, ModelColumn> modelColumnMap) {
-        List<ModelColumn> shardingColumns = new ArrayList<>();
+        List<ModelColumn> seriesIDColumns = new ArrayList<>();
         for (final ModelColumn col : modelColumnMap.values()) {
-            if (col.getBanyanDBExtension().isShardingKey()) {
-                shardingColumns.add(col);
+            if (col.getBanyanDBExtension().isSeriesID()) {
+                seriesIDColumns.add(col);
             }
         }
-        return shardingColumns.stream()
-                .sorted(Comparator.comparingInt(col -> col.getBanyanDBExtension().getShardingKeyIdx()))
+        return seriesIDColumns.stream()
+                .sorted(Comparator.comparingInt(col -> col.getBanyanDBExtension().getSeriesIDIdx()))
                 .map(col -> col.getColumnName().getName())
                 .collect(Collectors.toList());
     }
 
-    List<TagMetadata> parseTagMetadata(Model model, Schema.SchemaBuilder builder) {
+    /**
+     * Parse tags' metadata for {@link Stream}
+     * Every field of a class is registered as a {@link org.apache.skywalking.banyandb.model.v1.BanyandbModel.Tag}
+     * regardless of its dataType.
+     *
+     * @since 9.4.0 Skip {@link Record#TIME_BUCKET}
+     */
+    List<TagMetadata> parseTagMetadata(Model model, Schema.SchemaBuilder builder, List<String> seriesIDColumns, String group) {
         List<TagMetadata> tagMetadataList = new ArrayList<>();
-        // skip metric
-        Optional<ValueColumnMetadata.ValueColumn> valueColumnOpt = ValueColumnMetadata.INSTANCE
-                .readValueColumnDefinition(model.getName());
         for (final ModelColumn col : model.getColumns()) {
-            if (valueColumnOpt.isPresent() && valueColumnOpt.get().getValueCName().equals(col.getColumnName().getStorageName())) {
-                builder.spec(col.getColumnName().getStorageName(), new ColumnSpec(ColumnType.FIELD, col.getType()));
+            final String columnStorageName = col.getColumnName().getStorageName();
+            if (columnStorageName.equals(Record.TIME_BUCKET)) {
                 continue;
             }
-            final TagFamilySpec.TagSpec tagSpec = parseTagSpec(col);
-            if (tagSpec == null) {
-                continue;
-            }
-            builder.spec(col.getColumnName().getStorageName(), new ColumnSpec(ColumnType.TAG, col.getType()));
-            if (col.shouldIndex()) {
-                // build indexRule
-                IndexRule indexRule = parseIndexRule(tagSpec.getTagName(), col);
-                tagMetadataList.add(new TagMetadata(indexRule, tagSpec));
+            final TagSpec tagSpec = parseTagSpec(col);
+            builder.spec(columnStorageName, new ColumnSpec(ColumnType.TAG, col.getType()));
+            String colName = col.getColumnName().getStorageName();
+            if (col.getBanyanDBExtension().shouldIndex()) {
+                if (!seriesIDColumns.contains(colName) || null != col.getBanyanDBExtension().getAnalyzer()) {
+                    tagMetadataList.add(new TagMetadata(
+                        indexRule(
+                            group, tagSpec.getName(), col.getBanyanDBExtension().isEnableSort(),
+                            col.getBanyanDBExtension().getAnalyzer()
+                        ), tagSpec));
+                } else {
+                    tagMetadataList.add(new TagMetadata(null, tagSpec));
+                }
             } else {
                 tagMetadataList.add(new TagMetadata(null, tagSpec));
             }
@@ -219,95 +371,195 @@ public enum MetadataRegistry {
         return tagMetadataList;
     }
 
+    @Builder
+    private static class MeasureMetadata {
+        @Singular
+        private final List<TagMetadata> tags;
+        @Singular
+        private final List<BanyandbDatabase.FieldSpec> fields;
+    }
+
+    /**
+     * Parse tags and fields' metadata for {@link Measure}.
+     * For field whose dataType is not {@link Column.ValueDataType#NOT_VALUE},
+     * it is registered as {@link org.apache.skywalking.banyandb.measure.v1.BanyandbMeasure.DataPoint.Field}
+     *
+     * @since 9.4.0 Skip {@link Metrics#TIME_BUCKET}
+     */
+    MeasureMetadata parseTagAndFieldMetadata(Model model, Schema.SchemaBuilder builder, List<String> seriesIDColumns, String group) {
+        // skip metric
+        MeasureMetadata.MeasureMetadataBuilder result = MeasureMetadata.builder();
+        for (final ModelColumn col : model.getColumns()) {
+            final String columnStorageName = col.getColumnName().getStorageName();
+            if (columnStorageName.equals(Metrics.TIME_BUCKET)) {
+                continue;
+            }
+            if (col.getBanyanDBExtension().isMeasureField()) {
+                builder.spec(columnStorageName, new ColumnSpec(ColumnType.FIELD, col.getType()));
+                result.field(parseFieldSpec(col));
+                continue;
+            }
+            final TagSpec tagSpec = parseTagSpec(col);
+            builder.spec(columnStorageName, new ColumnSpec(ColumnType.TAG, col.getType()));
+            String colName = col.getColumnName().getStorageName();
+
+            if (col.getBanyanDBExtension().shouldIndex()) {
+                if (!seriesIDColumns.contains(colName) || null != col.getBanyanDBExtension().getAnalyzer()) {
+                    result.tag(new TagMetadata(
+                        indexRule(
+                            group, tagSpec.getName(), col.getBanyanDBExtension().isEnableSort(),
+                            col.getBanyanDBExtension().getAnalyzer()
+                        ), tagSpec));
+                } else {
+                    result.tag(new TagMetadata(null, tagSpec));
+                }
+            } else {
+                result.tag(new TagMetadata(null, tagSpec));
+            }
+        }
+
+        return result.build();
+    }
+
     /**
      * Parse TagSpec from {@link ModelColumn}
      *
      * @param modelColumn the column in the model to be parsed
      * @return a typed tag spec
      */
-    @Nullable
-    private TagFamilySpec.TagSpec parseTagSpec(ModelColumn modelColumn) {
+    @Nonnull
+    private TagSpec parseTagSpec(ModelColumn modelColumn) {
         final Class<?> clazz = modelColumn.getType();
         final String colName = modelColumn.getColumnName().getStorageName();
+        TagSpec.Builder tagSpec = TagSpec.newBuilder().setName(colName);
         if (String.class.equals(clazz) || StorageDataComplexObject.class.isAssignableFrom(clazz) || JsonObject.class.equals(clazz)) {
-            return TagFamilySpec.TagSpec.newStringTag(colName);
+            tagSpec = tagSpec.setType(TagType.TAG_TYPE_STRING);
         } else if (int.class.equals(clazz) || long.class.equals(clazz)) {
-            return TagFamilySpec.TagSpec.newIntTag(colName);
+            tagSpec = tagSpec.setType(TagType.TAG_TYPE_INT);
         } else if (byte[].class.equals(clazz)) {
-            return TagFamilySpec.TagSpec.newBinaryTag(colName);
+            tagSpec = tagSpec.setType(TagType.TAG_TYPE_DATA_BINARY);
         } else if (clazz.isEnum()) {
-            return TagFamilySpec.TagSpec.newIntTag(colName);
+            tagSpec = tagSpec.setType(TagType.TAG_TYPE_INT);
         } else if (double.class.equals(clazz) || Double.class.equals(clazz)) {
             // serialize double as binary
-            return TagFamilySpec.TagSpec.newBinaryTag(colName);
+            tagSpec = tagSpec.setType(TagType.TAG_TYPE_DATA_BINARY);
         } else if (IntList.class.isAssignableFrom(clazz)) {
-            return TagFamilySpec.TagSpec.newIntArrayTag(colName);
+            tagSpec = tagSpec.setType(TagType.TAG_TYPE_INT_ARRAY);
         } else if (List.class.isAssignableFrom(clazz)) { // handle exceptions
             ParameterizedType t = (ParameterizedType) modelColumn.getGenericType();
             if (String.class.equals(t.getActualTypeArguments()[0])) {
-                return TagFamilySpec.TagSpec.newStringArrayTag(colName);
+                tagSpec = tagSpec.setType(TagType.TAG_TYPE_STRING_ARRAY);
             }
+        } else {
+            throw new IllegalStateException("type " + modelColumn.getType().toString() + " is not supported");
         }
-        throw new IllegalStateException("type " + modelColumn.getType().toString() + " is not supported");
+
+        if (modelColumn.isIndexOnly()) {
+            tagSpec.setIndexedOnly(true);
+        }
+        return tagSpec.build();
     }
 
-    public SchemaMetadata parseMetadata(Model model, BanyanDBStorageConfig config) {
-        if (model.isRecord()) {
-            String group = "stream-default";
-            if (model.isSuperDataset()) {
-                // for superDataset, we should use separate group
-                group = "stream-" + model.getName();
-            }
-            return new SchemaMetadata(group,
+    public SchemaMetadata parseMetadata(Model model, BanyanDBStorageConfig config, DownSamplingConfigService configService) {
+        if (model.isRecord()) { // stream
+            return new SchemaMetadata(model.isSuperDataset() ? model.getName() : "normal",
                     model.getName(),
                     Kind.STREAM,
-                    config.getRecordShardsNumber() *
-                            (model.isSuperDataset() ? config.getSuperDatasetShardsFactor() : 1)
-            );
+                    model.getDownsampling(),
+                    model.isSuperDataset() ? config.getGrSuperShardNum() : config.getGrNormalShardNum(),
+                    model.isSuperDataset() ? config.getGrSuperSIDays() : config.getGrNormalSIDays(),
+                    model.isSuperDataset() ? config.getGrSuperTTLDays() : config.getGrNormalTTLDays());
         }
-        return new SchemaMetadata("measure-default", model.getName(), Kind.MEASURE, config.getMetricsShardsNumber());
+
+        if (model.getBanyanDBModelExtension().isIndexMode()) {
+            return new SchemaMetadata("index", model.getName(), Kind.MEASURE,
+                    model.getDownsampling(),
+                    config.getGmIndexShardNum(),
+                    config.getGmIndexSIDays(),
+                    config.getGmIndexTTLDays());
+        }
+
+        switch (model.getDownsampling()) {
+            case Minute:
+                return new SchemaMetadata(DownSampling.Minute.getName(),
+                        model.getName(),
+                        Kind.MEASURE,
+                        model.getDownsampling(),
+                        config.getGmMinuteShardNum(),
+                        config.getGmMinuteSIDays(),
+                        config.getGmMinuteTTLDays());
+            case Hour:
+                if (!configService.shouldToHour()) {
+                    throw new UnsupportedOperationException("downsampling to hour is not supported");
+                }
+                return new SchemaMetadata(DownSampling.Hour.getName(),
+                        model.getName(),
+                        Kind.MEASURE,
+                        model.getDownsampling(),
+                        config.getGmHourShardNum(),
+                        config.getGmHourSIDays(),
+                        config.getGmHourTTLDays());
+            case Day:
+                if (!configService.shouldToDay()) {
+                    throw new UnsupportedOperationException("downsampling to day is not supported");
+                }
+                return new SchemaMetadata(DownSampling.Day.getName(),
+                        model.getName(),
+                        Kind.MEASURE,
+                        model.getDownsampling(),
+                        config.getGmDayShardNum(),
+                        config.getGmDaySIDays(),
+                        config.getGmDayTTLDays());
+            default:
+                throw new UnsupportedOperationException("unsupported downSampling interval:" + model.getDownsampling());
+        }
     }
 
     @RequiredArgsConstructor
     @Data
+    @ToString
     public static class SchemaMetadata {
         private final String group;
-        private final String name;
+        /**
+         * name of the {@link Model}
+         */
+        private final String modelName;
         private final Kind kind;
-
+        /**
+         * down-sampling of the {@link Model}
+         */
+        private final DownSampling downSampling;
         private final int shard;
+        private final int segmentIntervalDays;
+        private final int ttlDays;
 
-        public Optional<NamedSchema<?>> findRemoteSchema(BanyanDBClient client) throws BanyanDBException {
-            try {
-                switch (kind) {
-                    case STREAM:
-                        return Optional.ofNullable(client.findStream(this.group, this.name));
-                    case MEASURE:
-                        return Optional.ofNullable(client.findMeasure(this.group, this.name));
-                    default:
-                        throw new IllegalStateException("should not reach here");
-                }
-            } catch (BanyanDBException ex) {
-                if (ex.getStatus().equals(Status.Code.NOT_FOUND)) {
-                    return Optional.empty();
-                }
-
-                throw ex;
+        /**
+         * Format the entity name for BanyanDB
+         *
+         * @param modelName    name of the model
+         * @param downSampling not used if it is {@link DownSampling#None}
+         * @return entity (e.g. measure, stream) name
+         */
+        static String formatName(String modelName, DownSampling downSampling) {
+            if (downSampling == null || downSampling == DownSampling.None) {
+                return modelName;
             }
+            return modelName + "_" + downSampling.getName();
         }
 
-        private List<TagFamilySpec> extractTagFamilySpec(List<TagMetadata> tagMetadataList) {
+        private List<TagFamilySpec> extractTagFamilySpec(List<TagMetadata> tagMetadataList, boolean shouldAddID) {
+            final String indexFamily = SchemaMetadata.this.indexFamily();
+            final String nonIndexFamily = SchemaMetadata.this.nonIndexFamily();
             Map<String, List<TagMetadata>> tagMetadataMap = tagMetadataList.stream()
-                    .collect(Collectors.groupingBy(tagMetadata -> tagMetadata.isIndex() ? SchemaMetadata.this.indexFamily() : SchemaMetadata.this.nonIndexFamily()));
+                    .collect(Collectors.groupingBy(tagMetadata -> tagMetadata.isIndex() ? indexFamily : nonIndexFamily));
 
             final List<TagFamilySpec> tagFamilySpecs = new ArrayList<>(tagMetadataMap.size());
             for (final Map.Entry<String, List<TagMetadata>> entry : tagMetadataMap.entrySet()) {
-                final TagFamilySpec.Builder b = TagFamilySpec.create(entry.getKey())
-                        .addTagSpecs(entry.getValue().stream().map(TagMetadata::getTagSpec).collect(Collectors.toList()));
-                if (this.getKind() == Kind.MEASURE && entry.getKey().equals(this.indexFamily())) {
-                    // append measure ID, but it should not generate an index in the client side.
-                    // BanyanDB will take care of the ID index registration.
-                    b.addIDTagSpec();
+                final TagFamilySpec.Builder b = TagFamilySpec.newBuilder();
+                b.setName(entry.getKey());
+                b.addAllTags(entry.getValue().stream().map(TagMetadata::getTagSpec).collect(Collectors.toList()));
+                if (shouldAddID && indexFamily.equals(entry.getKey())) {
+                    b.addTags(TagSpec.newBuilder().setType(TagType.TAG_TYPE_STRING).setName(BanyanDBConverter.ID));
                 }
                 tagFamilySpecs.add(b.build());
             }
@@ -315,19 +567,14 @@ public enum MetadataRegistry {
             return tagFamilySpecs;
         }
 
-        public Group getOrCreateGroup(BanyanDBClient client) throws BanyanDBException {
-            Group g = client.findGroup(this.group);
-            if (g != null) {
-                return g;
+        /**
+         * @return name of the Stream/Measure in the BanyanDB
+         */
+        public String name() {
+            if (this.kind == Kind.MEASURE) {
+                return formatName(this.modelName, this.downSampling);
             }
-            switch (kind) {
-                case STREAM:
-                    return client.define(Group.create(this.group, Catalog.STREAM, this.shard, 0, Duration.ofDays(7)));
-                case MEASURE:
-                    return client.define(Group.create(this.group, Catalog.MEASURE, this.shard, 12, Duration.ofDays(7)));
-                default:
-                    throw new IllegalStateException("should not reach here");
-            }
+            return this.modelName;
         }
 
         public String indexFamily() {
@@ -360,7 +607,7 @@ public enum MetadataRegistry {
     @Getter
     private static class TagMetadata {
         private final IndexRule indexRule;
-        private final TagFamilySpec.TagSpec tagSpec;
+        private final TagSpec tagSpec;
 
         boolean isIndex() {
             return this.indexRule != null;
@@ -369,6 +616,7 @@ public enum MetadataRegistry {
 
     @Builder
     @EqualsAndHashCode
+    @ToString
     public static class Schema {
         @Getter
         private final SchemaMetadata metadata;
@@ -383,13 +631,25 @@ public enum MetadataRegistry {
         @Singular
         private final Set<String> fields;
 
+        @Getter
+        private final String timestampColumn4Stream;
+
+        @Getter
+        @Nullable
+        private final TopNAggregation topNSpec;
+
         public ColumnSpec getSpec(String columnName) {
             return this.specs.get(columnName);
+        }
+
+        public static String formatTopNName(String measureName) {
+            return measureName + "_topn";
         }
     }
 
     @RequiredArgsConstructor
     @Getter
+    @ToString
     public static class ColumnSpec {
         private final ColumnType columnType;
         private final Class<?> columnClass;

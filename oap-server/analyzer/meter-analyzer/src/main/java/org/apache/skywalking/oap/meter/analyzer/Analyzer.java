@@ -27,13 +27,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.text.CaseUtils;
 import org.apache.skywalking.oap.meter.analyzer.dsl.DSL;
 import org.apache.skywalking.oap.meter.analyzer.dsl.DownsamplingType;
 import org.apache.skywalking.oap.meter.analyzer.dsl.Expression;
@@ -42,11 +42,12 @@ import org.apache.skywalking.oap.meter.analyzer.dsl.FilterExpression;
 import org.apache.skywalking.oap.meter.analyzer.dsl.Result;
 import org.apache.skywalking.oap.meter.analyzer.dsl.Sample;
 import org.apache.skywalking.oap.meter.analyzer.dsl.SampleFamily;
-import org.apache.skywalking.oap.meter.analyzer.k8s.K8sInfoRegistry;
 import org.apache.skywalking.oap.server.core.analysis.Layer;
 import org.apache.skywalking.oap.server.core.analysis.TimeBucket;
 import org.apache.skywalking.oap.server.core.analysis.manual.endpoint.EndpointTraffic;
 import org.apache.skywalking.oap.server.core.analysis.manual.instance.InstanceTraffic;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.process.ProcessRelationClientSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.process.ProcessRelationServerSideMetrics;
 import org.apache.skywalking.oap.server.core.analysis.manual.relation.service.ServiceRelationClientSideMetrics;
 import org.apache.skywalking.oap.server.core.analysis.manual.relation.service.ServiceRelationServerSideMetrics;
 import org.apache.skywalking.oap.server.core.analysis.manual.service.ServiceTraffic;
@@ -56,6 +57,7 @@ import org.apache.skywalking.oap.server.core.analysis.meter.ScopeType;
 import org.apache.skywalking.oap.server.core.analysis.meter.function.AcceptableValue;
 import org.apache.skywalking.oap.server.core.analysis.meter.function.BucketedValues;
 import org.apache.skywalking.oap.server.core.analysis.meter.function.PercentileArgument;
+import org.apache.skywalking.oap.server.core.analysis.metrics.DataLabel;
 import org.apache.skywalking.oap.server.core.analysis.metrics.DataTable;
 import org.apache.skywalking.oap.server.core.analysis.worker.MetricsStreamProcessor;
 
@@ -82,7 +84,7 @@ public class Analyzer {
                                  final String filterExpression,
                                  final String expression,
                                  final MeterSystem meterSystem) {
-        Expression e = DSL.parse(expression);
+        Expression e = DSL.parse(metricName, expression);
         FilterExpression filter = null;
         if (!Strings.isNullOrEmpty(filterExpression)) {
             filter = new FilterExpression(filterExpression);
@@ -145,17 +147,20 @@ public class Analyzer {
                 case labeled:
                     AcceptableValue<DataTable> lv = meterSystem.buildMetrics(metricName, DataTable.class);
                     DataTable dt = new DataTable();
+                    // put all labels into the data table.
                     for (Sample each : ss) {
-                        dt.put(composeGroup(each.getLabels()), getValue(each));
+                        DataLabel dataLabel = new DataLabel();
+                        dataLabel.putAll(each.getLabels());
+                        dt.put(dataLabel, getValue(each));
                     }
                     lv.accept(meterEntity, dt);
                     send(lv, ss[0].getTimestamp());
                     break;
                 case histogram:
                 case histogramPercentile:
-                    Stream.of(ss).map(s -> Tuple.of(composeGroup(s.getLabels(), k -> !Objects.equals("le", k)), s))
+                    Stream.of(ss).map(s -> Tuple.of(getDataLabels(s.getLabels(), k -> !Objects.equals("le", k)), s))
                           .collect(groupingBy(Tuple2::_1, mapping(Tuple2::_2, toList())))
-                          .forEach((group, subSs) -> {
+                          .forEach((dataLabel, subSs) -> {
                               if (subSs.size() < 1) {
                                   return;
                               }
@@ -172,7 +177,7 @@ public class Analyzer {
                                   vv[i] = getValue(s);
                               }
                               BucketedValues bv = new BucketedValues(bb, vv);
-                              bv.setGroup(group);
+                              bv.setLabels(dataLabel);
                               long time = subSs.get(0).getTimestamp();
                               if (metricType == MetricType.histogram) {
                                   AcceptableValue<BucketedValues> v = meterSystem.buildMetrics(
@@ -201,13 +206,10 @@ public class Analyzer {
         return Math.round(sample.getValue());
     }
 
-    private String composeGroup(ImmutableMap<String, String> labels) {
-        return composeGroup(labels, k -> true);
-    }
-
-    private String composeGroup(ImmutableMap<String, String> labels, Predicate<String> filter) {
-        return labels.keySet().stream().filter(filter).sorted().map(labels::get)
-                     .collect(Collectors.joining("-"));
+    private DataLabel getDataLabels(ImmutableMap<String, String> labels, Predicate<String> filter) {
+        DataLabel dataLabel = new DataLabel();
+        labels.keySet().stream().filter(filter).forEach(k -> dataLabel.put(k, labels.get(k)));
+        return dataLabel;
     }
 
     @RequiredArgsConstructor
@@ -241,17 +243,13 @@ public class Analyzer {
             }
         }
         createMetric(ctx.getScopeType(), metricType.literal, ctx.getDownsampling());
-
-        if (ctx.isRetagByK8sMeta()) {
-            K8sInfoRegistry.getInstance().start();
-        }
     }
 
     private void createMetric(final ScopeType scopeType,
                               final String dataType,
                               final DownsamplingType downsamplingType) {
-        String functionName = String.format(
-            "%s%s", downsamplingType.toString().toLowerCase(), StringUtils.capitalize(dataType));
+        String downSamplingStr = CaseUtils.toCamelCase(downsamplingType.toString().toLowerCase(), false, '_');
+        String functionName = String.format("%s%s", downSamplingStr, StringUtils.capitalize(dataType));
         meterSystem.create(metricName, functionName, scopeType);
     }
 
@@ -262,16 +260,12 @@ public class Analyzer {
 
     private void generateTraffic(MeterEntity entity) {
         if (entity.getDetectPoint() != null) {
-            switch (entity.getDetectPoint()) {
-                case SERVER:
-                    entity.setServiceName(entity.getDestServiceName());
-                    toService(requireNonNull(entity.getDestServiceName()), entity.getLayer());
-                    serverSide(entity);
+            switch (entity.getScopeType()) {
+                case SERVICE_RELATION:
+                    serviceRelationTraffic(entity);
                     break;
-                case CLIENT:
-                    entity.setServiceName(entity.getSourceServiceName());
-                    toService(requireNonNull(entity.getSourceServiceName()), entity.getLayer());
-                    clientSide(entity);
+                case PROCESS_RELATION:
+                    processRelationTraffic(entity);
                     break;
                 default:
             }
@@ -309,23 +303,74 @@ public class Analyzer {
         MetricsStreamProcessor.getInstance().in(s);
     }
 
-    private void serverSide(MeterEntity entity) {
+    private void serviceRelationTraffic(MeterEntity entity) {
+        switch (entity.getDetectPoint()) {
+            case SERVER:
+                entity.setServiceName(entity.getDestServiceName());
+                toService(requireNonNull(entity.getDestServiceName()), entity.getLayer());
+                serviceRelationServerSide(entity);
+                break;
+            case CLIENT:
+                entity.setServiceName(entity.getSourceServiceName());
+                toService(requireNonNull(entity.getSourceServiceName()), entity.getLayer());
+                serviceRelationClientSide(entity);
+                break;
+            default:
+        }
+    }
+
+    private void serviceRelationServerSide(MeterEntity entity) {
         ServiceRelationServerSideMetrics metrics = new ServiceRelationServerSideMetrics();
         metrics.setTimeBucket(TimeBucket.getMinuteTimeBucket(System.currentTimeMillis()));
         metrics.setSourceServiceId(entity.sourceServiceId());
         metrics.setDestServiceId(entity.destServiceId());
-        metrics.setComponentId(0);
+        metrics.getComponentIds().add(entity.getComponentId());
         metrics.setEntityId(entity.id());
         MetricsStreamProcessor.getInstance().in(metrics);
     }
 
-    private void clientSide(MeterEntity entity) {
+    private void serviceRelationClientSide(MeterEntity entity) {
         ServiceRelationClientSideMetrics metrics = new ServiceRelationClientSideMetrics();
         metrics.setTimeBucket(TimeBucket.getMinuteTimeBucket(System.currentTimeMillis()));
         metrics.setSourceServiceId(entity.sourceServiceId());
         metrics.setDestServiceId(entity.destServiceId());
-        metrics.setComponentId(0);
+        metrics.getComponentIds().add(entity.getComponentId());
         metrics.setEntityId(entity.id());
         MetricsStreamProcessor.getInstance().in(metrics);
     }
+
+    private void processRelationTraffic(MeterEntity entity) {
+        switch (entity.getDetectPoint()) {
+            case SERVER:
+                processRelationServerSide(entity);
+                break;
+            case CLIENT:
+                processRelationClientSide(entity);
+                break;
+            default:
+        }
+    }
+
+    private void processRelationServerSide(MeterEntity entity) {
+        ProcessRelationServerSideMetrics metrics = new ProcessRelationServerSideMetrics();
+        metrics.setTimeBucket(TimeBucket.getMinuteTimeBucket(System.currentTimeMillis()));
+        metrics.setServiceInstanceId(entity.serviceInstanceId());
+        metrics.setSourceProcessId(entity.getSourceProcessId());
+        metrics.setDestProcessId(entity.getDestProcessId());
+        metrics.setEntityId(entity.id());
+        metrics.setComponentId(entity.getComponentId());
+        MetricsStreamProcessor.getInstance().in(metrics);
+    }
+
+    private void processRelationClientSide(MeterEntity entity) {
+        ProcessRelationClientSideMetrics metrics = new ProcessRelationClientSideMetrics();
+        metrics.setTimeBucket(TimeBucket.getMinuteTimeBucket(System.currentTimeMillis()));
+        metrics.setServiceInstanceId(entity.serviceInstanceId());
+        metrics.setSourceProcessId(entity.getSourceProcessId());
+        metrics.setDestProcessId(entity.getDestProcessId());
+        metrics.setEntityId(entity.id());
+        metrics.setComponentId(entity.getComponentId());
+        MetricsStreamProcessor.getInstance().in(metrics);
+    }
+
 }

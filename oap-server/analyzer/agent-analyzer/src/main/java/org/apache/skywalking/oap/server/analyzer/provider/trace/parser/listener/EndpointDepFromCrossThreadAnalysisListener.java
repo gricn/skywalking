@@ -93,6 +93,7 @@ public class EndpointDepFromCrossThreadAnalysisListener extends CommonAnalysisLi
                     } else {
                         sourceBuilder.setSourceLayer(Layer.VIRTUAL_GATEWAY);
                     }
+                    sourceBuilder.setSourceEndpointOwnerServiceLayer(Layer.GENERAL);
                 } else {
                     sourceBuilder.setSourceServiceName(reference.getParentService());
                     sourceBuilder.setSourceServiceInstanceName(reference.getParentServiceInstance());
@@ -122,6 +123,7 @@ public class EndpointDepFromCrossThreadAnalysisListener extends CommonAnalysisLi
     @Override
     public void build() {
         depBuilders.forEach(endpointDep -> {
+            endpointDep.prepare();
             // Source endpoint meta could be generated duplicated if it belongs to an entry span of downstream.
             // But if it belongs a local or exit span, then miss it in metadata.
             // Consider OAP has the capability to remove duplicate, generate it anyway.

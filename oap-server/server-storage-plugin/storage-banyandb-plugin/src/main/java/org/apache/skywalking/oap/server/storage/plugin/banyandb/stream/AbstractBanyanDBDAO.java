@@ -18,74 +18,278 @@
 
 package org.apache.skywalking.oap.server.storage.plugin.banyandb.stream;
 
+import com.google.gson.Gson;
+import java.util.Objects;
+import org.apache.skywalking.banyandb.model.v1.BanyandbModel;
+import org.apache.skywalking.banyandb.v1.client.AbstractCriteria;
 import org.apache.skywalking.banyandb.v1.client.AbstractQuery;
+import org.apache.skywalking.banyandb.v1.client.And;
 import org.apache.skywalking.banyandb.v1.client.MeasureQuery;
 import org.apache.skywalking.banyandb.v1.client.MeasureQueryResponse;
+import org.apache.skywalking.banyandb.v1.client.Or;
 import org.apache.skywalking.banyandb.v1.client.PairQueryCondition;
+import org.apache.skywalking.banyandb.v1.client.Span;
 import org.apache.skywalking.banyandb.v1.client.StreamQuery;
 import org.apache.skywalking.banyandb.v1.client.StreamQueryResponse;
 import org.apache.skywalking.banyandb.v1.client.TimestampRange;
+import org.apache.skywalking.banyandb.v1.client.TopNQuery;
+import org.apache.skywalking.banyandb.v1.client.TopNQueryResponse;
+import org.apache.skywalking.banyandb.v1.client.Trace;
+import org.apache.skywalking.oap.server.core.query.input.AttrCondition;
+import org.apache.skywalking.oap.server.core.query.type.KeyValue;
+import org.apache.skywalking.oap.server.core.query.type.debugging.DebuggingSpan;
+import org.apache.skywalking.oap.server.core.query.type.debugging.DebuggingTraceContext;
 import org.apache.skywalking.oap.server.core.storage.AbstractDAO;
+import org.apache.skywalking.oap.server.library.util.CollectionUtils;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.BanyanDBStorageClient;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.MetadataRegistry;
-
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BiFunction;
 
 public abstract class AbstractBanyanDBDAO extends AbstractDAO<BanyanDBStorageClient> {
     private static final Instant UPPER_BOUND = Instant.ofEpochSecond(0, Long.MAX_VALUE);
 
     private static final TimestampRange LARGEST_TIME_RANGE = new TimestampRange(0, UPPER_BOUND.toEpochMilli());
 
+    protected static final long UPPER_BOUND_TIME = UPPER_BOUND.toEpochMilli();
+
+    protected static final long LOWER_BOUND_TIME = 0;
+
     protected AbstractBanyanDBDAO(BanyanDBStorageClient client) {
         super(client);
     }
 
-    protected StreamQueryResponse query(String modelName, Set<String> tags, QueryBuilder<StreamQuery> builder) throws IOException {
-        return this.query(modelName, tags, null, builder);
+    protected StreamQueryResponse query(String streamModelName, Set<String> tags, QueryBuilder<StreamQuery> builder) throws IOException {
+        return this.query(streamModelName, tags, null, builder);
     }
 
-    protected StreamQueryResponse query(String modelName, Set<String> tags, TimestampRange timestampRange,
+    protected StreamQueryResponse query(String streamModelName, Set<String> tags, TimestampRange timestampRange,
                                         QueryBuilder<StreamQuery> builder) throws IOException {
-        MetadataRegistry.Schema schema = MetadataRegistry.INSTANCE.findMetadata(modelName);
+        MetadataRegistry.Schema schema = MetadataRegistry.INSTANCE.findRecordMetadata(streamModelName);
         if (schema == null) {
-            throw new IllegalStateException("schema is not registered");
+            throw new IllegalArgumentException("schema is not registered");
         }
         final StreamQuery query;
         if (timestampRange == null) {
-            query = new StreamQuery(schema.getMetadata().getGroup(), schema.getMetadata().getName(), LARGEST_TIME_RANGE, tags);
+            query = new StreamQuery(List.of(schema.getMetadata().getGroup()), schema.getMetadata().name(), LARGEST_TIME_RANGE, tags);
         } else {
-            query = new StreamQuery(schema.getMetadata().getGroup(), schema.getMetadata().getName(), timestampRange, tags);
+            query = new StreamQuery(List.of(schema.getMetadata().getGroup()), schema.getMetadata().name(), timestampRange, tags);
         }
 
         builder.apply(query);
-
+        DebuggingTraceContext traceContext = DebuggingTraceContext.TRACE_CONTEXT.get();
+        if (traceContext != null && traceContext.isDebug()) {
+            query.enableTrace();
+        }
         return getClient().query(query);
     }
 
-    protected MeasureQueryResponse query(String modelName, Set<String> tags, Set<String> fields,
-                                         QueryBuilder<MeasureQuery> builder) throws IOException {
-        return this.query(modelName, tags, fields, null, builder);
+    protected StreamQueryResponse queryDebuggable(String modelName, Set<String> tags, TimestampRange timestampRange,
+                                                  QueryBuilder<StreamQuery> queryBuilder) throws IOException {
+        DebuggingTraceContext traceContext = DebuggingTraceContext.TRACE_CONTEXT.get();
+        DebuggingSpan span = null;
+        try {
+            StringBuilder builder = new StringBuilder();
+            if (traceContext != null) {
+                span = traceContext.createSpan("Query BanyanDB Stream");
+                MetadataRegistry.Schema schema = MetadataRegistry.INSTANCE.findRecordMetadata(modelName);
+                builder.append("Condition: ")
+                       .append("modelName:")
+                       .append(modelName)
+                       .append(", Schema: ")
+                       .append(schema)
+                       .append(", Tags: ")
+                       .append(tags)
+                       .append(", TimestampRange: ")
+                       .append(timestampRange);
+                span.setMsg(builder.toString());
+            }
+            StreamQueryResponse response = query(modelName, tags, timestampRange, queryBuilder);
+            if (traceContext != null && traceContext.isDumpStorageRsp()) {
+                builder.append("\n").append(" Response: ").append(new Gson().toJson(response.getElements()));
+                span.setMsg(builder.toString());
+            }
+            addDBTrace2DebuggingTrace(response.getTrace(), traceContext, span);
+            return response;
+        } finally {
+            if (traceContext != null && span != null) {
+                traceContext.stopSpan(span);
+            }
+        }
     }
 
-    protected MeasureQueryResponse query(String modelName, Set<String> tags, Set<String> fields,
+    protected TopNQueryResponse topN(MetadataRegistry.Schema schema,
+                                     TimestampRange timestampRange,
+                                     int number,
+                                     List<KeyValue> additionalConditions,
+                                     List<AttrCondition> attributes) throws IOException {
+        return topNQuery(schema, timestampRange, number, AbstractQuery.Sort.DESC, additionalConditions, attributes);
+    }
+
+    protected TopNQueryResponse bottomN(MetadataRegistry.Schema schema,
+                                        TimestampRange timestampRange,
+                                        int number,
+                                        List<KeyValue> additionalConditions,
+                                        List<AttrCondition> attributes) throws IOException {
+        return topNQuery(schema, timestampRange, number, AbstractQuery.Sort.ASC, additionalConditions, attributes);
+    }
+
+    protected TopNQueryResponse topNQueryDebuggable(MetadataRegistry.Schema schema,
+                                                    TimestampRange timestampRange,
+                                                    int number,
+                                                    AbstractQuery.Sort sort,
+                                                    List<KeyValue> additionalConditions,
+                                                    List<AttrCondition> attributes) throws IOException {
+        DebuggingTraceContext traceContext = DebuggingTraceContext.TRACE_CONTEXT.get();
+        DebuggingSpan span = null;
+        try {
+            StringBuilder builder = new StringBuilder();
+            if (traceContext != null) {
+                span = traceContext.createSpan("Query BanyanDB TopNQuery");
+                builder.append("Condition: ")
+                       .append("Schema: ")
+                       .append(schema)
+                       .append(", TimestampRange: ")
+                       .append(timestampRange)
+                       .append(", Number: ")
+                       .append(number)
+                       .append(", Sort: ")
+                       .append(sort)
+                       .append(", AdditionalConditions: ")
+                       .append(additionalConditions)
+                       .append(", Attributes: ")
+                       .append(attributes);
+                span.setMsg(builder.toString());
+            }
+            TopNQueryResponse response = topNQuery(schema, timestampRange, number, sort, additionalConditions, attributes);
+            if (traceContext != null && traceContext.isDumpStorageRsp()) {
+                builder.append("\n").append(" Response: ").append(new Gson().toJson(response.getTopNLists()));
+                span.setMsg(builder.toString());
+            }
+            return response;
+        } finally {
+            if (traceContext != null && span != null) {
+                traceContext.stopSpan(span);
+            }
+        }
+    }
+
+    private TopNQueryResponse topNQuery(MetadataRegistry.Schema schema,
+                                        TimestampRange timestampRange,
+                                        int number,
+                                        AbstractQuery.Sort sort,
+                                        List<KeyValue> additionalConditions,
+                                        List<AttrCondition> attributes) throws IOException {
+        final TopNQuery q = new TopNQuery(List.of(schema.getMetadata().getGroup()), Objects.requireNonNull(
+            schema.getTopNSpec()).getMetadata().getName(),
+                                          timestampRange,
+                                          number, sort);
+        q.setAggregationType(MeasureQuery.Aggregation.Type.MEAN);
+        List<PairQueryCondition<?>> conditions = new ArrayList<>();
+        if (CollectionUtils.isNotEmpty(additionalConditions)) {
+            for (final KeyValue kv : additionalConditions) {
+                conditions.add(PairQueryCondition.StringQueryCondition.eq(kv.getKey(), kv.getValue()));
+            }
+        }
+        if (CollectionUtils.isNotEmpty(attributes)) {
+            attributes.forEach(attr -> {
+                if (attr.isEquals()) {
+                    conditions.add(PairQueryCondition.StringQueryCondition.eq(attr.getKey(), attr.getValue()));
+                } else {
+                    conditions.add(PairQueryCondition.StringQueryCondition.ne(attr.getKey(), attr.getValue()));
+                }
+            });
+        }
+        q.setConditions(conditions);
+
+        return getClient().query(q);
+    }
+
+    protected MeasureQueryResponse queryDebuggable(MetadataRegistry.Schema schema,
+                                                   Set<String> tags,
+                                                   Set<String> fields,
+                                                   TimestampRange timestampRange,
+                                                   QueryBuilder<MeasureQuery> queryBuilder) throws IOException {
+        DebuggingTraceContext traceContext = DebuggingTraceContext.TRACE_CONTEXT.get();
+        DebuggingSpan span = null;
+        try {
+            StringBuilder builder = new StringBuilder();
+            if (traceContext != null) {
+                span = traceContext.createSpan("Query BanyanDB Measure");
+                builder.append("Condition: ")
+                       .append("Schema: ")
+                       .append(schema)
+                       .append(", Tags: ")
+                       .append(tags)
+                       .append(", Fields: ")
+                       .append(fields)
+                       .append(", TimestampRange: ")
+                       .append(timestampRange);
+                span.setMsg(builder.toString());
+            }
+            MeasureQueryResponse response = query(schema, tags, fields, timestampRange, queryBuilder);
+            if (traceContext != null && traceContext.isDumpStorageRsp()) {
+                builder.append("\n").append(" Response: ").append(new Gson().toJson(response.getDataPoints()));
+                span.setMsg(builder.toString());
+            }
+            addDBTrace2DebuggingTrace(response.getTrace(), traceContext, span);
+            return response;
+        } finally {
+            if (traceContext != null && span != null) {
+                traceContext.stopSpan(span);
+            }
+        }
+    }
+
+    protected MeasureQueryResponse query(MetadataRegistry.Schema schema,
+                                         Set<String> tags,
+                                         Set<String> fields,
+                                         QueryBuilder<MeasureQuery> builder) throws IOException {
+        return query(schema, tags, fields, null, builder);
+    }
+
+    protected MeasureQueryResponse query(MetadataRegistry.Schema schema, Set<String> tags, Set<String> fields,
                                          TimestampRange timestampRange, QueryBuilder<MeasureQuery> builder) throws IOException {
-        MetadataRegistry.Schema schema = MetadataRegistry.INSTANCE.findMetadata(modelName);
         if (schema == null) {
-            throw new IllegalStateException("schema is not registered");
+            throw new IllegalArgumentException("measure is not registered");
         }
         final MeasureQuery query;
         if (timestampRange == null) {
-            query = new MeasureQuery(schema.getMetadata().getGroup(), schema.getMetadata().getName(), LARGEST_TIME_RANGE, tags, fields);
+            query = new MeasureQuery(List.of(schema.getMetadata().getGroup()), schema.getMetadata().name(), LARGEST_TIME_RANGE, tags, fields);
         } else {
-            query = new MeasureQuery(schema.getMetadata().getGroup(), schema.getMetadata().getName(), timestampRange, tags, fields);
+            query = new MeasureQuery(List.of(schema.getMetadata().getGroup()), schema.getMetadata().name(), timestampRange, tags, fields);
         }
 
         builder.apply(query);
-
+        DebuggingTraceContext traceContext = DebuggingTraceContext.TRACE_CONTEXT.get();
+        if (traceContext != null && traceContext.isDebug()) {
+            query.enableTrace();
+        }
         return getClient().query(query);
+    }
+
+    private void addDBTrace2DebuggingTrace(Trace trace, DebuggingTraceContext traceContext, DebuggingSpan parentSpan) {
+        if (traceContext == null || parentSpan == null || trace == null) {
+            return;
+        }
+        trace.getSpans().forEach(span -> addDBSpan2DebuggingTrace(span, traceContext, parentSpan));
+    }
+
+    private void addDBSpan2DebuggingTrace(Span span, DebuggingTraceContext traceContext, DebuggingSpan parentSpan) {
+        DebuggingSpan debuggingSpan = traceContext.createSpanForTransform("BanyanDB: " + span.getMessage());
+        debuggingSpan.setStartTime(span.getStartTime().getSeconds() * 1000_000_000 + span.getStartTime().getNanos());
+        debuggingSpan.setEndTime(span.getEndTime().getSeconds() * 1000_000_000 + span.getEndTime().getNanos());
+        debuggingSpan.setDuration(span.getDuration());
+        debuggingSpan.setParentSpanId(parentSpan.getSpanId());
+        debuggingSpan.setMsg(span.getTags().toString());
+        if (span.isError()) {
+            debuggingSpan.setError("BanyanDB occurs error.");
+        }
+        span.getChildren().forEach(child -> addDBSpan2DebuggingTrace(child, traceContext, debuggingSpan));
     }
 
     protected static QueryBuilder<MeasureQuery> emptyMeasureQuery() {
@@ -121,6 +325,57 @@ public abstract class AbstractBanyanDBDAO extends AbstractDAO<BanyanDBStorageCli
 
         protected PairQueryCondition<String> eq(String name, String value) {
             return PairQueryCondition.StringQueryCondition.eq(name, value);
+        }
+
+        protected PairQueryCondition<String> ne(String name, String value) {
+            return PairQueryCondition.StringQueryCondition.ne(name, value);
+        }
+
+        protected PairQueryCondition<String> match(String name, String value) {
+            return PairQueryCondition.StringQueryCondition.match(name, value);
+        }
+
+        protected PairQueryCondition<String> match(String name, String value, BanyandbModel.Condition.MatchOption matchOption) {
+            return PairQueryCondition.StringQueryCondition.match(name, value, matchOption);
+        }
+
+        protected PairQueryCondition<List<String>> in(String name, List<String> values) {
+            return PairQueryCondition.StringArrayQueryCondition.in(name, values);
+        }
+
+        protected PairQueryCondition<List<String>> notIn(String name, List<String> values) {
+            return PairQueryCondition.StringArrayQueryCondition.in(name, values);
+        }
+
+        protected PairQueryCondition<Long> ne(String name, long value) {
+            return PairQueryCondition.LongQueryCondition.ne(name, value);
+        }
+
+        protected AbstractCriteria and(List<? extends AbstractCriteria> conditions) {
+            if (conditions.isEmpty()) {
+                return null;
+            }
+            if (conditions.size() == 1) {
+                return conditions.get(0);
+            }
+
+            return conditions.subList(2, conditions.size()).stream().reduce(
+                    And.create(conditions.get(0), conditions.get(1)),
+                    (BiFunction<AbstractCriteria, AbstractCriteria, AbstractCriteria>) And::create,
+                    And::create);
+        }
+
+        protected AbstractCriteria or(List<? extends AbstractCriteria> conditions) {
+            if (conditions.isEmpty()) {
+                return null;
+            }
+            if (conditions.size() == 1) {
+                return conditions.get(0);
+            }
+            return conditions.subList(2, conditions.size()).stream().reduce(
+                    Or.create(conditions.get(0), conditions.get(1)),
+                    (BiFunction<AbstractCriteria, AbstractCriteria, AbstractCriteria>) Or::create,
+                    Or::create);
         }
     }
 }

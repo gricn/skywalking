@@ -18,6 +18,7 @@
 
 package org.apache.skywalking.oap.server.core.storage.annotation;
 
+import org.apache.skywalking.oap.server.core.analysis.record.Record;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -67,5 +68,51 @@ public @interface ElasticSearch {
                 this.name = name;
             }
         }
+    }
+
+    /**
+     * Keyword represents the annotated field needs a keyword type in the ElasticSearch.
+     * Typically, this annotation is for a field with
+     * {@link org.apache.skywalking.oap.server.core.storage.type.StorageDataComplexObject} type, which uses the `text`
+     * type by default.
+     *
+     * @since 9.4.0
+     */
+    @Target({ElementType.FIELD})
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Keyword {
+
+    }
+
+    @Target({ElementType.FIELD})
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Column {
+
+        /**
+         * Warning: this is only used to solve the conflict among the existing columns since we need support to merge
+         * all metrics
+         * in one physical index template. When creating a new column, we should avoid the compatibility issue
+         * between these 2 storage modes rather than use this alias.
+         */
+        @Deprecated
+        String legacyName();
+
+    }
+
+    /**
+     * Routing defines a field of {@link Record} to control the sharding policy.
+     */
+    @Target(ElementType.FIELD)
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Routing {
+    }
+
+    /**
+     * EnableDocValues is used to enable the `doc_values` of the field in the ElasticSearch.
+     * For more information, check https://www.elastic.co/guide/en/elasticsearch/reference/current/doc-values.html
+     */
+    @Target(ElementType.FIELD)
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface EnableDocValues {
     }
 }

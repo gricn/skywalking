@@ -30,6 +30,8 @@ This uses a two-way mapping strategy. The agent or SDK could use the value (ID) 
 - Python reserved: [7000, 8000)
 - PHP reserved: [8000, 9000)
 - C++ reserved: [9000, 10000)
+- Javascript reserved: [10000, 11000)
+- Rust reserved: [11000, 12000)
 
 Example:
 ```yaml
@@ -45,6 +47,36 @@ Dubbo:
 H2:
   id: 4
   languages: Java
+```
+
+## Component Library Priority
+Component ID priority represents the component is degree of closeness between the library and business codes
+The higher the atomic number, the higher the priority, which mean it is closer to the business codes,
+further away from OS kernel or general Computer Science concept.
+
+The range of priorities is [0, 100], both sided included. 0 is the lowest priority.
+To keep forward compatibility, the default(when not set) priority is 50.
+
+For example, a typical priority sequence is TCP < TLS(TCP) < RPC < HTTP < HTTPS < gRPC/SpringMVC/Dubbo
+
+Example:
+```yaml
+Unknown:
+  id: 0
+  language: All
+  priority: 0
+tcp:
+  id: 110
+  languages: Java
+  priority: 10
+https:
+  id: 129
+  languages: ebpf
+  priority: 46
+tls:
+  id: 130
+  languages: ebpf, mesh
+  priority: 11 
 ```
 
 ## Remote server mapping

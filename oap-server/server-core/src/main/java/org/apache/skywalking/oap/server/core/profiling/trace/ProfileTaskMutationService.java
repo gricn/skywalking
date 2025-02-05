@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
+import org.apache.skywalking.oap.server.core.Const;
 import org.apache.skywalking.oap.server.network.constants.ProfileConstants;
 import org.apache.skywalking.oap.server.library.util.StringUtil;
 import org.apache.skywalking.oap.server.core.analysis.TimeBucket;
@@ -84,6 +85,7 @@ public class ProfileTaskMutationService implements Service {
         // create task
         final long createTime = System.currentTimeMillis();
         final ProfileTaskRecord task = new ProfileTaskRecord();
+        task.setTaskId(createTime + Const.ID_CONNECTOR + serviceId);
         task.setServiceId(serviceId);
         task.setEndpointName(endpointName.trim());
         task.setStartTime(taskStartTime);
@@ -95,7 +97,7 @@ public class ProfileTaskMutationService implements Service {
         task.setTimeBucket(TimeBucket.getMinuteTimeBucket(taskStartTime));
         NoneStreamProcessor.getInstance().in(task);
 
-        return ProfileTaskCreationResult.builder().id(task.id()).build();
+        return ProfileTaskCreationResult.builder().id(task.id().build()).build();
     }
 
     private String checkDataSuccess(final String serviceId,
@@ -137,15 +139,17 @@ public class ProfileTaskMutationService implements Service {
         }
 
         // Each service can monitor up to 1 endpoints during the execution of tasks
-        long startTimeBucket = TimeBucket.getMinuteTimeBucket(monitorStartTime);
         long endTimeBucket = TimeBucket.getMinuteTimeBucket(monitorEndTime);
         final List<ProfileTask> alreadyHaveTaskList = getProfileTaskDAO().getTaskList(
-            serviceId, null, startTimeBucket, endTimeBucket, 1);
+            serviceId, null, null, endTimeBucket, 1);
         if (CollectionUtils.isNotEmpty(alreadyHaveTaskList)) {
-            // if any task time bucket in this range, means already have task, because time bucket is base on task end time
-            return "current service already has monitor task execute at this time";
+            for (ProfileTask profileTask : alreadyHaveTaskList) {
+                if (profileTask.getStartTime() + TimeUnit.MINUTES.toMillis(profileTask.getDuration()) >= monitorStartTime) {
+                    // if the endTime is greater or equal than the startTime of the newly created task, i.e. there is overlap between two tasks, it is an invalid case
+                    return "current service already has monitor task execute at this time";
+                }
+            }
         }
-
         return null;
     }
 

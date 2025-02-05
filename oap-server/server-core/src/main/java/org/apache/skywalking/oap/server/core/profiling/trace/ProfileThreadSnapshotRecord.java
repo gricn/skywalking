@@ -20,13 +20,14 @@ package org.apache.skywalking.oap.server.core.profiling.trace;
 
 import lombok.Getter;
 import lombok.Setter;
-import org.apache.skywalking.oap.server.core.Const;
 import org.apache.skywalking.oap.server.core.analysis.Stream;
 import org.apache.skywalking.oap.server.core.analysis.record.Record;
 import org.apache.skywalking.oap.server.core.analysis.worker.RecordStreamProcessor;
 import org.apache.skywalking.oap.server.core.source.ScopeDeclaration;
+import org.apache.skywalking.oap.server.core.storage.StorageID;
 import org.apache.skywalking.oap.server.core.storage.annotation.BanyanDB;
 import org.apache.skywalking.oap.server.core.storage.annotation.Column;
+import org.apache.skywalking.oap.server.core.storage.annotation.ElasticSearch;
 import org.apache.skywalking.oap.server.core.storage.annotation.SQLDatabase;
 import org.apache.skywalking.oap.server.core.storage.type.Convert2Entity;
 import org.apache.skywalking.oap.server.core.storage.type.Convert2Storage;
@@ -41,6 +42,7 @@ import static org.apache.skywalking.oap.server.core.source.DefaultScopeDefine.PR
 @Setter
 @ScopeDeclaration(id = PROFILE_TASK_SEGMENT_SNAPSHOT, name = "ProfileThreadSnapshot")
 @Stream(name = ProfileThreadSnapshotRecord.INDEX_NAME, scopeId = PROFILE_TASK_SEGMENT_SNAPSHOT, builder = ProfileThreadSnapshotRecord.Builder.class, processor = RecordStreamProcessor.class)
+@BanyanDB.TimestampColumn(ProfileThreadSnapshotRecord.DUMP_TIME)
 public class ProfileThreadSnapshotRecord extends Record {
 
     public static final String INDEX_NAME = "profile_task_segment_snapshot";
@@ -50,24 +52,30 @@ public class ProfileThreadSnapshotRecord extends Record {
     public static final String SEQUENCE = "sequence";
     public static final String STACK_BINARY = "stack_binary";
 
-    @Column(columnName = TASK_ID)
-    @SQLDatabase.QueryUnifiedIndex(withColumns = {SEGMENT_ID})
+    @Column(name = TASK_ID)
+    @SQLDatabase.CompositeIndex(withColumns = {SEGMENT_ID})
     private String taskId;
-    @Column(columnName = SEGMENT_ID)
-    @SQLDatabase.QueryUnifiedIndex(withColumns = {SEQUENCE})
-    @SQLDatabase.QueryUnifiedIndex(withColumns = {DUMP_TIME})
-    @BanyanDB.ShardingKey(index = 0)
+    @Column(name = SEGMENT_ID)
+    @SQLDatabase.CompositeIndex(withColumns = {SEQUENCE})
+    @SQLDatabase.CompositeIndex(withColumns = {DUMP_TIME})
+    @BanyanDB.SeriesID(index = 0)
     private String segmentId;
-    @Column(columnName = DUMP_TIME)
+    @ElasticSearch.EnableDocValues
+    @Column(name = DUMP_TIME)
+    @BanyanDB.NoIndexing
     private long dumpTime;
-    @Column(columnName = SEQUENCE)
+    @ElasticSearch.EnableDocValues
+    @Column(name = SEQUENCE)
     private int sequence;
-    @Column(columnName = STACK_BINARY)
+    @Column(name = STACK_BINARY)
     private byte[] stackBinary;
 
     @Override
-    public String id() {
-        return getTaskId() + Const.ID_CONNECTOR + getSegmentId() + Const.ID_CONNECTOR + getSequence() + Const.ID_CONNECTOR;
+    public StorageID id() {
+        return new StorageID()
+            .append(TASK_ID, getTaskId())
+            .append(SEGMENT_ID, getSegmentId())
+            .append(SEQUENCE, getSequence());
     }
 
     public static class Builder implements StorageBuilder<ProfileThreadSnapshotRecord> {

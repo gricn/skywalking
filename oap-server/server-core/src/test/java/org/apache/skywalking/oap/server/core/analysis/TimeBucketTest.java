@@ -18,19 +18,17 @@
 
 package org.apache.skywalking.oap.server.core.analysis;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Calendar;
 import java.util.TimeZone;
 
-@RunWith(Parameterized.class)
 public class TimeBucketTest {
     private static final long NOW = System.currentTimeMillis();
 
-    @Parameterized.Parameters
     public static Object[] parameters() {
         return new Object[]{
                 DownSampling.Second,
@@ -40,14 +38,9 @@ public class TimeBucketTest {
         };
     }
 
-    private DownSampling downSampling;
-
-    public TimeBucketTest(DownSampling downSampling) {
-        this.downSampling = downSampling;
-    }
-
-    @Test
-    public void testConversion() {
+    @ParameterizedTest
+    @MethodSource("parameters")
+    public void testConversion(DownSampling downSampling) {
         long timestamp = TimeBucket.getTimestamp(TimeBucket.getTimeBucket(NOW, downSampling));
 
         Calendar instance = Calendar.getInstance(TimeZone.getDefault());
@@ -70,6 +63,16 @@ public class TimeBucketTest {
                 // Fall through
             }
         }
-        Assert.assertEquals(instance.getTimeInMillis(), timestamp);
+        Assertions.assertEquals(instance.getTimeInMillis(), timestamp);
+    }
+
+    @Test
+    public void testRetainToDay4MinuteBucket() {
+        Assertions.assertEquals(202407110000L, TimeBucket.retainToDay4MinuteBucket(202407112218L));
+    }
+
+    @Test
+    public void testRetainToDayLastMin4MinuteBucket() {
+        Assertions.assertEquals(202407112359L, TimeBucket.retainToDayLastMin4MinuteBucket(202407112218L));
     }
 }

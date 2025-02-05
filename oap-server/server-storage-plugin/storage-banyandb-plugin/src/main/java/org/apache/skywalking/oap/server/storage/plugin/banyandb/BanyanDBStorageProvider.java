@@ -18,16 +18,22 @@
 
 package org.apache.skywalking.oap.server.storage.plugin.banyandb;
 
+import org.apache.skywalking.banyandb.common.v1.BanyandbCommon;
 import org.apache.skywalking.oap.server.core.CoreModule;
-import org.apache.skywalking.oap.server.core.config.ConfigService;
 import org.apache.skywalking.oap.server.core.storage.IBatchDAO;
 import org.apache.skywalking.oap.server.core.storage.IHistoryDeleteDAO;
 import org.apache.skywalking.oap.server.core.storage.StorageBuilderFactory;
 import org.apache.skywalking.oap.server.core.storage.StorageDAO;
 import org.apache.skywalking.oap.server.core.storage.StorageModule;
 import org.apache.skywalking.oap.server.core.storage.cache.INetworkAddressAliasDAO;
+import org.apache.skywalking.oap.server.core.storage.management.UIMenuManagementDAO;
 import org.apache.skywalking.oap.server.core.storage.management.UITemplateManagementDAO;
 import org.apache.skywalking.oap.server.core.storage.model.ModelCreator;
+import org.apache.skywalking.oap.server.core.storage.model.ModelInstaller;
+import org.apache.skywalking.oap.server.core.storage.profiling.asyncprofiler.IAsyncProfilerTaskLogQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.asyncprofiler.IAsyncProfilerTaskQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.asyncprofiler.IJFRDataQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.continuous.IContinuousProfilingPolicyDAO;
 import org.apache.skywalking.oap.server.core.storage.profiling.ebpf.IEBPFProfilingDataDAO;
 import org.apache.skywalking.oap.server.core.storage.profiling.ebpf.IEBPFProfilingScheduleDAO;
 import org.apache.skywalking.oap.server.core.storage.profiling.ebpf.IEBPFProfilingTaskDAO;
@@ -39,35 +45,44 @@ import org.apache.skywalking.oap.server.core.storage.query.IAggregationQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.IAlarmQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.IBrowserLogQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.IEventQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IHierarchyQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.ILogQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.IMetadataQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.IMetricsQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IRecordsQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.ISpanAttachedEventQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.ITagAutoCompleteQueryDAO;
-import org.apache.skywalking.oap.server.core.storage.query.ITopNRecordsQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.ITopologyQueryDAO;
 import org.apache.skywalking.oap.server.core.storage.query.ITraceQueryDAO;
-import org.apache.skywalking.oap.server.library.module.ModuleConfig;
+import org.apache.skywalking.oap.server.core.storage.query.IZipkinQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.ttl.StorageTTLStatusQuery;
 import org.apache.skywalking.oap.server.library.module.ModuleDefine;
 import org.apache.skywalking.oap.server.library.module.ModuleProvider;
 import org.apache.skywalking.oap.server.library.module.ModuleStartException;
 import org.apache.skywalking.oap.server.library.module.ServiceNotProvidedException;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBEBPFProfilingScheduleQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBEventQueryDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBHierarchyQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBMetadataQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBMetricsQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBNetworkAddressAliasDAO;
-import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBTagAutocompleteQueryDAO;
-import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBProfileTaskQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBServiceLabelDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBTagAutocompleteQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBTopologyQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBAlarmQueryDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBAsyncProfilerTaskLogQueryDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBAsyncProfilerTaskQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBBrowserLogQueryDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBContinuousProfilingPolicyDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBEBPFProfilingDataDAO;
-import org.apache.skywalking.oap.server.storage.plugin.banyandb.measure.BanyanDBEBPFProfilingScheduleQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBEBPFProfilingTaskDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBHistoryDeleteDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBJFRDataQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBLogQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBProfileTaskLogQueryDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBProfileTaskQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBProfileThreadSnapshotQueryDAO;
+import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBSpanAttachedEventQueryDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBStorageDAO;
 import org.apache.skywalking.oap.server.storage.plugin.banyandb.stream.BanyanDBTraceQueryDAO;
 import org.apache.skywalking.oap.server.telemetry.TelemetryModule;
@@ -78,10 +93,7 @@ import org.apache.skywalking.oap.server.telemetry.api.MetricsTag;
 public class BanyanDBStorageProvider extends ModuleProvider {
     private BanyanDBStorageConfig config;
     private BanyanDBStorageClient client;
-
-    public BanyanDBStorageProvider() {
-        this.config = new BanyanDBStorageConfig();
-    }
+    private ModelInstaller modelInstaller;
 
     @Override
     public String name() {
@@ -94,59 +106,117 @@ public class BanyanDBStorageProvider extends ModuleProvider {
     }
 
     @Override
-    public ModuleConfig createConfigBeanIfAbsent() {
-        return config;
+    public ConfigCreator newConfigCreator() {
+        return new ConfigCreator<BanyanDBStorageConfig>() {
+            @Override
+            public Class type() {
+                return BanyanDBStorageConfig.class;
+            }
+
+            @Override
+            public void onInitialized(final BanyanDBStorageConfig initialized) {
+                config = initialized;
+            }
+        };
     }
 
     @Override
     public void prepare() throws ServiceNotProvidedException, ModuleStartException {
+        if (config.getGmDayTTLDays() > config.getGmIndexTTLDays()) {
+            throw new ModuleStartException("gmDayTTLDays must be less than or equal to gmIndexTTLDays");
+        }
+        if (config.getGmHourTTLDays() > config.getGmIndexTTLDays()) {
+            throw new ModuleStartException("gmHourTTLDays must be less than or equal to gmIndexTTLDays");
+        }
+        if (config.getGmMinuteTTLDays() > config.getGmIndexTTLDays()) {
+            throw new ModuleStartException("gmMinuteTTLDays must be less than or equal to gmIndexTTLDays");
+        }
         this.registerServiceImplementation(StorageBuilderFactory.class, new StorageBuilderFactory.Default());
 
-        this.client = new BanyanDBStorageClient(config.getHost(), config.getPort());
+        this.client = new BanyanDBStorageClient(config);
+        this.modelInstaller = new BanyanDBIndexInstaller(client, getManager(), this.config);
 
         // Stream
-        this.registerServiceImplementation(IBatchDAO.class, new BanyanDBBatchDAO(client, config.getMaxBulkSize(), config.getFlushInterval(), config.getConcurrentWriteThreads()));
+        this.registerServiceImplementation(
+            IBatchDAO.class, new BanyanDBBatchDAO(client, config.getMaxBulkSize(), config.getFlushInterval(),
+                                                  config.getConcurrentWriteThreads()
+            ));
         this.registerServiceImplementation(StorageDAO.class, new BanyanDBStorageDAO(client));
-        this.registerServiceImplementation(INetworkAddressAliasDAO.class, new BanyanDBNetworkAddressAliasDAO(client));
-        this.registerServiceImplementation(ITraceQueryDAO.class, new BanyanDBTraceQueryDAO(client));
+        this.registerServiceImplementation(INetworkAddressAliasDAO.class, new BanyanDBNetworkAddressAliasDAO(client, this.config));
+        this.registerServiceImplementation(ITraceQueryDAO.class, new BanyanDBTraceQueryDAO(client, this.config.getSegmentQueryMaxSize()));
         this.registerServiceImplementation(IBrowserLogQueryDAO.class, new BanyanDBBrowserLogQueryDAO(client));
-        this.registerServiceImplementation(IMetadataQueryDAO.class, new BanyanDBMetadataQueryDAO(client));
+        this.registerServiceImplementation(IMetadataQueryDAO.class, new BanyanDBMetadataQueryDAO(client, this.config));
         this.registerServiceImplementation(IAlarmQueryDAO.class, new BanyanDBAlarmQueryDAO(client));
         this.registerServiceImplementation(ILogQueryDAO.class, new BanyanDBLogQueryDAO(client));
-        this.registerServiceImplementation(IProfileTaskQueryDAO.class, new BanyanDBProfileTaskQueryDAO(client, this.config.getProfileTaskQueryMaxSize()));
-        this.registerServiceImplementation(IProfileTaskLogQueryDAO.class, new BanyanDBProfileTaskLogQueryDAO(client, this.config.getProfileTaskQueryMaxSize()));
-        this.registerServiceImplementation(IProfileThreadSnapshotQueryDAO.class, new BanyanDBProfileThreadSnapshotQueryDAO(client, this.config.getProfileTaskQueryMaxSize()));
+        this.registerServiceImplementation(
+            IProfileTaskQueryDAO.class, new BanyanDBProfileTaskQueryDAO(client,
+                                                                        this.config.getProfileTaskQueryMaxSize()
+            ));
+        this.registerServiceImplementation(
+            IProfileTaskLogQueryDAO.class, new BanyanDBProfileTaskLogQueryDAO(client,
+                                                                              this.config.getProfileTaskQueryMaxSize()
+            ));
+        this.registerServiceImplementation(
+            IProfileThreadSnapshotQueryDAO.class, new BanyanDBProfileThreadSnapshotQueryDAO(client,
+                                                                                            this.config.getProfileTaskQueryMaxSize()
+            ));
         this.registerServiceImplementation(UITemplateManagementDAO.class, new BanyanDBUITemplateManagementDAO(client));
+        this.registerServiceImplementation(UIMenuManagementDAO.class, new BanyanDBUIMenuManagementDAO(client));
         this.registerServiceImplementation(IEventQueryDAO.class, new BanyanDBEventQueryDAO(client));
         this.registerServiceImplementation(ITopologyQueryDAO.class, new BanyanDBTopologyQueryDAO(client));
         this.registerServiceImplementation(IEBPFProfilingTaskDAO.class, new BanyanDBEBPFProfilingTaskDAO(client));
-        this.registerServiceImplementation(IEBPFProfilingDataDAO.class, new BanyanDBEBPFProfilingDataDAO(client));
-        this.registerServiceImplementation(IEBPFProfilingScheduleDAO.class, new BanyanDBEBPFProfilingScheduleQueryDAO(client));
+        this.registerServiceImplementation(IEBPFProfilingDataDAO.class, new BanyanDBEBPFProfilingDataDAO(client, this.config.getProfileDataQueryBatchSize()));
+        this.registerServiceImplementation(
+            IEBPFProfilingScheduleDAO.class, new BanyanDBEBPFProfilingScheduleQueryDAO(client));
+        this.registerServiceImplementation(IContinuousProfilingPolicyDAO.class, new BanyanDBContinuousProfilingPolicyDAO(client));
 
-        this.registerServiceImplementation(IServiceLabelDAO.class, new BanyanDBServiceLabelDAO(client));
+        this.registerServiceImplementation(IServiceLabelDAO.class, new BanyanDBServiceLabelDAO(client, this.config));
         this.registerServiceImplementation(ITagAutoCompleteQueryDAO.class, new BanyanDBTagAutocompleteQueryDAO(client));
         this.registerServiceImplementation(IHistoryDeleteDAO.class, new BanyanDBHistoryDeleteDAO());
         this.registerServiceImplementation(IMetricsQueryDAO.class, new BanyanDBMetricsQueryDAO(client));
         this.registerServiceImplementation(IAggregationQueryDAO.class, new BanyanDBAggregationQueryDAO(client));
-        this.registerServiceImplementation(ITopNRecordsQueryDAO.class, new BanyanDBTopNRecordsQueryDAO(client));
+        this.registerServiceImplementation(IRecordsQueryDAO.class, new BanyanDBRecordsQueryDAO(client));
+        this.registerServiceImplementation(IZipkinQueryDAO.class, new BanyanDBZipkinQueryDAO(client));
+        this.registerServiceImplementation(ISpanAttachedEventQueryDAO.class, new BanyanDBSpanAttachedEventQueryDAO(client, this.config.getProfileDataQueryBatchSize()));
+        this.registerServiceImplementation(IHierarchyQueryDAO.class, new BanyanDBHierarchyQueryDAO(client, this.config));
+        this.registerServiceImplementation(
+                IAsyncProfilerTaskQueryDAO.class, new BanyanDBAsyncProfilerTaskQueryDAO(client,
+                        this.config.getAsyncProfilerTaskQueryMaxSize()
+                ));
+        this.registerServiceImplementation(
+                IAsyncProfilerTaskLogQueryDAO.class, new BanyanDBAsyncProfilerTaskLogQueryDAO(client,
+                        this.config.getAsyncProfilerTaskQueryMaxSize()
+                ));
+        this.registerServiceImplementation(IJFRDataQueryDAO.class, new BanyanDBJFRDataQueryDAO(client));
+        this.registerServiceImplementation(
+            StorageTTLStatusQuery.class,
+            new BanyanDBTTLStatusQuery(config)
+        );
     }
 
     @Override
     public void start() throws ServiceNotProvidedException, ModuleStartException {
-        final ConfigService configService = getManager().find(CoreModule.NAME)
-                .provider()
-                .getService(ConfigService.class);
-
         MetricsCreator metricCreator = getManager().find(TelemetryModule.NAME)
-                .provider()
-                .getService(MetricsCreator.class);
+                                                   .provider()
+                                                   .getService(MetricsCreator.class);
         HealthCheckMetrics healthChecker = metricCreator.createHealthCheckerGauge(
-                "storage_banyandb", MetricsTag.EMPTY_KEY, MetricsTag.EMPTY_VALUE);
+            "storage_banyandb", MetricsTag.EMPTY_KEY, MetricsTag.EMPTY_VALUE);
         this.client.registerChecker(healthChecker);
         try {
             this.client.connect();
-            BanyanDBIndexInstaller installer = new BanyanDBIndexInstaller(client, getManager(), this.config);
-            getManager().find(CoreModule.NAME).provider().getService(ModelCreator.class).addModelListener(installer);
+            this.client.defineIfEmpty(BanyandbCommon.Group.newBuilder()
+                                                          .setMetadata(
+                                                              BanyandbCommon.Metadata.newBuilder()
+                                                                                     .setName(
+                                                                                         BanyanDBUITemplateManagementDAO.GROUP))
+                                                          .setCatalog(BanyandbCommon.Catalog.CATALOG_PROPERTY)
+                                                          .setResourceOpts(BanyandbCommon.ResourceOpts.newBuilder()
+                                                                                       .setShardNum(1)
+                                                                                       .build())
+                                                          .build());
+            this.modelInstaller.start();
+
+            getManager().find(CoreModule.NAME).provider().getService(ModelCreator.class).addModelListener(modelInstaller);
         } catch (Exception e) {
             throw new ModuleStartException(e.getMessage(), e);
         }
@@ -159,6 +229,6 @@ public class BanyanDBStorageProvider extends ModuleProvider {
 
     @Override
     public String[] requiredModules() {
-        return new String[]{CoreModule.NAME};
+        return new String[] {CoreModule.NAME};
     }
 }

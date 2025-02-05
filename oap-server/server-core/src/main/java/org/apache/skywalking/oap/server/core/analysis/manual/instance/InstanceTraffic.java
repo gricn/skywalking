@@ -30,7 +30,10 @@ import org.apache.skywalking.oap.server.core.analysis.Stream;
 import org.apache.skywalking.oap.server.core.analysis.metrics.Metrics;
 import org.apache.skywalking.oap.server.core.analysis.worker.MetricsStreamProcessor;
 import org.apache.skywalking.oap.server.core.remote.grpc.proto.RemoteData;
+import org.apache.skywalking.oap.server.core.storage.StorageID;
+import org.apache.skywalking.oap.server.core.storage.annotation.BanyanDB;
 import org.apache.skywalking.oap.server.core.storage.annotation.Column;
+import org.apache.skywalking.oap.server.core.storage.annotation.ElasticSearch;
 import org.apache.skywalking.oap.server.core.storage.type.Convert2Entity;
 import org.apache.skywalking.oap.server.core.storage.type.Convert2Storage;
 import org.apache.skywalking.oap.server.core.storage.type.StorageBuilder;
@@ -45,10 +48,11 @@ import static org.apache.skywalking.oap.server.core.source.DefaultScopeDefine.SE
     "serviceId",
     "name"
 })
+@BanyanDB.IndexMode
 public class InstanceTraffic extends Metrics {
     public static final String INDEX_NAME = "instance_traffic";
     public static final String SERVICE_ID = "service_id";
-    public static final String NAME = "name";
+    public static final String NAME = "instance_traffic_name";
     public static final String LAST_PING_TIME_BUCKET = "last_ping";
     public static final String PROPERTIES = "properties";
 
@@ -56,22 +60,25 @@ public class InstanceTraffic extends Metrics {
 
     @Setter
     @Getter
-    @Column(columnName = SERVICE_ID)
+    @Column(name = SERVICE_ID)
+    @BanyanDB.SeriesID(index = 0)
     private String serviceId;
 
     @Setter
     @Getter
-    @Column(columnName = NAME, storageOnly = true)
+    @Column(name = NAME, storageOnly = true)
+    @ElasticSearch.Column(legacyName = "name")
+    @BanyanDB.SeriesID(index = 1)
     private String name;
 
     @Setter
     @Getter
-    @Column(columnName = LAST_PING_TIME_BUCKET)
+    @Column(name = LAST_PING_TIME_BUCKET)
     private long lastPingTimestamp;
 
     @Setter
     @Getter
-    @Column(columnName = PROPERTIES, storageOnly = true, length = 50000)
+    @Column(name = PROPERTIES, storageOnly = true, length = 50000)
     private JsonObject properties;
 
     @Override
@@ -126,8 +133,12 @@ public class InstanceTraffic extends Metrics {
     }
 
     @Override
-    protected String id0() {
-        return IDManager.ServiceInstanceID.buildId(serviceId, name);
+    protected StorageID id0() {
+        return new StorageID()
+            .appendMutant(new String[] {
+                SERVICE_ID,
+                NAME
+            }, IDManager.ServiceInstanceID.buildId(serviceId, name));
     }
 
     public static class Builder implements StorageBuilder<InstanceTraffic> {

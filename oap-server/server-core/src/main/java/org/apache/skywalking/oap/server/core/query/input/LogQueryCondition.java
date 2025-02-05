@@ -21,12 +21,14 @@ package org.apache.skywalking.oap.server.core.query.input;
 import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.ToString;
 import org.apache.skywalking.oap.server.core.analysis.manual.searchtag.Tag;
 import org.apache.skywalking.oap.server.core.query.enumeration.Order;
 import org.apache.skywalking.oap.server.core.query.type.Pagination;
 
 @Getter
 @Setter
+@ToString
 public class LogQueryCondition {
     private String serviceId;
     private String serviceInstanceId;

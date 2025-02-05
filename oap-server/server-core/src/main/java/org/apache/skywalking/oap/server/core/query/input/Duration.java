@@ -18,32 +18,35 @@
 
 package org.apache.skywalking.oap.server.core.query.input;
 
-import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.ToString;
 import org.apache.skywalking.oap.server.core.query.DurationUtils;
 import org.apache.skywalking.oap.server.core.query.PointOfTime;
 import org.apache.skywalking.oap.server.core.query.enumeration.Step;
 
+import java.util.List;
+
 @Getter
 @Setter
+@ToString
 public class Duration {
     private String start;
     private String end;
     private Step step;
 
     /**
-     * See {@link DurationUtils#convertToTimeBucket(String)}
+     * See {@link DurationUtils#convertToTimeBucket(Step, String)}
      */
     public long getStartTimeBucket() {
-        return DurationUtils.INSTANCE.convertToTimeBucket(start);
+        return DurationUtils.INSTANCE.convertToTimeBucket(step, start);
     }
 
     /**
-     * See {@link DurationUtils#convertToTimeBucket(String)}
+     * See {@link DurationUtils#convertToTimeBucket(Step, String)}
      */
     public long getEndTimeBucket() {
-        return DurationUtils.INSTANCE.convertToTimeBucket(end);
+        return DurationUtils.INSTANCE.convertToTimeBucket(step, end);
     }
 
     public long getStartTimestamp() {
@@ -60,6 +63,14 @@ public class Duration {
 
     public long getEndTimeBucketInSec() {
         return DurationUtils.INSTANCE.endTimeDurationToSecondTimeBucket(step, end);
+    }
+
+    public long getStartTimeBucketInMin() {
+        return DurationUtils.INSTANCE.startTimeDurationToMinuteTimeBucket(step, start);
+    }
+
+    public long getEndTimeBucketInMin() {
+        return DurationUtils.INSTANCE.endTimeDurationToMinuteTimeBucket(step, end);
     }
 
     /**

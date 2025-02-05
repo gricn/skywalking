@@ -13,27 +13,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+debuggingtrace: null
 nodes:
 {{- contains .nodes }}
 - id: {{ b64enc "User" }}.0
   name: User
   type: USER
   isreal: false
+  layers:
+    - UNDEFINED
 - id: {{ b64enc "e2e-service-provider" }}.1
   name: e2e-service-provider
   type: Tomcat
   isreal: true
+  layers:
+    - GENERAL
 - id: {{ b64enc "php" }}.1
   name: php
   type: PHP
   isreal: true
+  layers:
+    - GENERAL
 {{- end }}
 calls:
 {{- contains .calls }}
 - source: {{ b64enc "php" }}.1
-  sourcecomponents: []
+  sourcecomponents:
+    - cURL
   target: {{ b64enc "e2e-service-provider" }}.1
-  targetcomponents: []
+  targetcomponents:
+    - Tomcat
   id: {{ b64enc "php" }}.1-{{ b64enc "e2e-service-provider" }}.1
   detectpoints:
     - CLIENT
@@ -41,7 +50,8 @@ calls:
 - source: {{ b64enc "User" }}.0
   sourcecomponents: []
   target: {{ b64enc "php" }}.1
-  targetcomponents: []
+  targetcomponents:
+    - PHP
   id: {{ b64enc "User" }}.0-{{ b64enc "php" }}.1
   detectpoints:
     - SERVER

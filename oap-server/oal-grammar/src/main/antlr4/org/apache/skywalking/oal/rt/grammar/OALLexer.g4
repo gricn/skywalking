@@ -28,10 +28,14 @@ FROM: 'from';
 FILTER: 'filter';
 DISABLE: 'disable';
 SRC_SERVICE: 'Service';
+SRC_TCP_SERVICE: 'TCPService';
 SRC_SERVICE_INSTANCE: 'ServiceInstance';
+SRC_TCP_SERVICE_INSTANCE: 'TCPServiceInstance';
 SRC_ENDPOINT: 'Endpoint';
 SRC_SERVICE_RELATION: 'ServiceRelation';
+SRC_TCP_SERVICE_RELATION: 'TCPServiceRelation';
 SRC_SERVICE_INSTANCE_RELATION: 'ServiceInstanceRelation';
+SRC_TCP_SERVICE_INSTANCE_RELATION: 'TCPServiceInstanceRelation';
 SRC_ENDPOINT_RELATION: 'EndpointRelation';
 SRC_SERVICE_INSTANCE_JVM_CPU: 'ServiceInstanceJVMCPU';
 SRC_SERVICE_INSTANCE_JVM_MEMORY: 'ServiceInstanceJVMMemory';
@@ -45,6 +49,22 @@ SRC_SERVICE_INSTANCE_CLR_GC: 'ServiceInstanceCLRGC';
 SRC_SERVICE_INSTANCE_CLR_THREAD: 'ServiceInstanceCLRThread';
 SRC_ENVOY_INSTANCE_METRIC: 'EnvoyInstanceMetric';
 SRC_EVENT: 'Event';
+SRC_CACHE_ACCESS: 'CacheAccess';
+SRC_MQ_ACCESS: 'MQAccess';
+SRC_MQ_ENDPOINT_ACCESS: 'MQEndpointAccess';
+SRC_K8S_SERVICE: 'K8SService';
+SRC_K8S_SERVICE_INSTANCE: 'K8SServiceInstance';
+SRC_K8S_ENDPOINT: 'K8SEndpoint';
+SRC_K8S_SERVICE_RELATION: 'K8SServiceRelation';
+SRC_K8S_SERVICE_INSTANCE_RELATION: 'K8SServiceInstanceRelation';
+SRC_CILIUM_SERVICE: 'CiliumService';
+SRC_CILIUM_SERVICE_INSTANCE: 'CiliumServiceInstance';
+SRC_CILIUM_ENDPOINT: 'CiliumEndpoint';
+SRC_CILIUM_SERVICE_RELATION: 'CiliumServiceRelation';
+SRC_CILIUM_SERVICE_INSTANCE_RELATION: 'CiliumServiceInstanceRelation';
+SRC_CILIUM_ENDPOINT_RELATION: 'CiliumEndpointRelation';
+DECORATOR: 'decorator';
+
 
 // Browser keywords
 SRC_BROWSER_APP_PERF: 'BrowserAppPerf';
@@ -53,6 +73,9 @@ SRC_BROWSER_APP_SINGLE_VERSION_PERF: 'BrowserAppSingleVersionPerf';
 SRC_BROWSER_APP_TRAFFIC: 'BrowserAppTraffic';
 SRC_BROWSER_APP_PAGE_TRAFFIC: 'BrowserAppPageTraffic';
 SRC_BROWSER_APP_SINGLE_VERSION_TRAFFIC: 'BrowserAppSingleVersionTraffic';
+SRC_BROWSER_APP_RESOURCE_PERF: 'BrowserAppResourcePerf';
+SRC_BROWSER_APP_WEB_VITALS_PERF: 'BrowserAppWebVitalsPerf';
+SRC_BROWSER_APP_WEB_INTERACTION_PERF: 'BrowserAppWebInteractionPerf';
 
 // Constructors symbols
 

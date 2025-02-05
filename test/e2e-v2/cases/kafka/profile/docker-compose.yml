@@ -88,6 +88,13 @@ services:
     ports:
     - 12800
 
+  banyandb:
+    extends:
+      file: ../../../script/docker-compose/base-compose.yml
+      service: banyandb
+    ports:
+      - 17912
+
   provider:
     build:
       context: ../../../
@@ -107,6 +114,7 @@ services:
       SW_AGENT_INSTANCE_NAME: provider1
       SW_LOGGING_OUTPUT: CONSOLE
       SW_METER_REPORT_INTERVAL: 5
+      SW_METER_ACTIVE: 'false'
     depends_on:
       oap:
         condition: service_healthy

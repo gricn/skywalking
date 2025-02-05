@@ -19,21 +19,21 @@
 package org.apache.skywalking.oap.server.core.remote.client;
 
 import io.grpc.ManagedChannel;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import io.netty.handler.ssl.SslContext;
 import java.util.List;
 import java.util.Objects;
-import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.skywalking.oap.server.library.datacarrier.DataCarrier;
-import org.apache.skywalking.oap.server.library.datacarrier.consumer.IConsumer;
 import org.apache.skywalking.oap.server.core.remote.data.StreamData;
 import org.apache.skywalking.oap.server.core.remote.grpc.proto.Empty;
 import org.apache.skywalking.oap.server.core.remote.grpc.proto.RemoteMessage;
 import org.apache.skywalking.oap.server.core.remote.grpc.proto.RemoteServiceGrpc;
 import org.apache.skywalking.oap.server.library.client.grpc.GRPCClient;
+import org.apache.skywalking.oap.server.library.datacarrier.DataCarrier;
+import org.apache.skywalking.oap.server.library.datacarrier.consumer.IConsumer;
 import org.apache.skywalking.oap.server.library.module.ModuleDefineHolder;
 import org.apache.skywalking.oap.server.telemetry.TelemetryModule;
 import org.apache.skywalking.oap.server.telemetry.api.CounterMetrics;
@@ -57,6 +57,7 @@ public class GRPCRemoteClient implements RemoteClient {
     private CounterMetrics remoteOutCounter;
     private CounterMetrics remoteOutErrorCounter;
     private int remoteTimeout;
+    private long lastRemoteResourceExhaustedTime = 0;
 
     public GRPCRemoteClient(final ModuleDefineHolder moduleDefineHolder,
                             final Address address,
@@ -79,7 +80,8 @@ public class GRPCRemoteClient implements RemoteClient {
                                                  "The number(client side) of inside remote inside aggregate rpc.",
                                                  new MetricsTag.Keys("dest", "self"), new MetricsTag.Values(
                                                      address
-                                                         .toString(), "N")
+                                                         .toString(), "N"
+                                                 )
                                              );
         remoteOutErrorCounter = moduleDefineHolder.find(TelemetryModule.NAME)
                                                   .provider()
@@ -89,7 +91,8 @@ public class GRPCRemoteClient implements RemoteClient {
                                                       "The error number(client side) of inside remote inside aggregate rpc.",
                                                       new MetricsTag.Keys("dest", "self"), new MetricsTag.Values(
                                                           address
-                                                              .toString(), "N")
+                                                              .toString(), "N"
+                                                      )
                                                   );
     }
 
@@ -154,10 +157,6 @@ public class GRPCRemoteClient implements RemoteClient {
 
     class RemoteMessageConsumer implements IConsumer<RemoteMessage> {
         @Override
-        public void init(final Properties properties) {
-        }
-
-        @Override
         public void consume(List<RemoteMessage> remoteMessages) {
             try {
                 StreamObserver<RemoteMessage> streamObserver = createStreamObserver();
@@ -175,10 +174,6 @@ public class GRPCRemoteClient implements RemoteClient {
         @Override
         public void onError(List<RemoteMessage> remoteMessages, Throwable t) {
             log.error(t.getMessage(), t);
-        }
-
-        @Override
-        public void onExit() {
         }
     }
 
@@ -204,8 +199,9 @@ public class GRPCRemoteClient implements RemoteClient {
             sleepTotalMillis += sleepMillis;
 
             if (sleepTotalMillis > 60000) {
-                log.warn("Remote client [{}] block times over 60 seconds. Current streaming number {}",
-                         address, concurrentStreamObserverNumber.get()
+                log.warn(
+                    "Remote client [{}] block times over 60 seconds. Current streaming number {}",
+                    address, concurrentStreamObserverNumber.get()
                 );
                 // Reset sleepTotalMillis to avoid too many warn logs.
                 sleepTotalMillis = 0;
@@ -222,6 +218,20 @@ public class GRPCRemoteClient implements RemoteClient {
                            @Override
                            public void onError(Throwable throwable) {
                                concurrentStreamObserverNumber.addAndGet(-1);
+                               Status status = Status.fromThrowable(throwable);
+                               if (Status.CANCELLED.getCode() == status.getCode()) {
+                                   if (log.isDebugEnabled()) {
+                                       log.debug(throwable.getMessage(), throwable);
+                                   }
+                                   return;
+                               } else if (Status.RESOURCE_EXHAUSTED.getCode() == status.getCode()) {
+                                   if (System.currentTimeMillis() - lastRemoteResourceExhaustedTime > 120_000) {
+                                       // Only output the log every 120 seconds.
+                                       log.warn(throwable.getMessage(), throwable);
+                                       lastRemoteResourceExhaustedTime = System.currentTimeMillis();
+                                   }
+                                   return;
+                               }
                                log.error(throwable.getMessage(), throwable);
                            }
 

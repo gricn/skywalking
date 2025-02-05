@@ -23,12 +23,19 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.skywalking.apm.network.common.v3.Commands;
 import org.apache.skywalking.apm.network.language.agent.v3.BrowserErrorLog;
 import org.apache.skywalking.apm.network.language.agent.v3.BrowserPerfData;
+import org.apache.skywalking.apm.network.language.agent.v3.BrowserResourcePerfData;
+import org.apache.skywalking.apm.network.language.agent.v3.BrowserWebInteractionsPerfData;
+import org.apache.skywalking.apm.network.language.agent.v3.BrowserWebVitalsPerfData;
 import org.apache.skywalking.oap.server.library.module.ModuleManager;
 import org.apache.skywalking.oap.server.receiver.browser.provider.BrowserServiceModuleConfig;
 import org.apache.skywalking.oap.server.receiver.browser.provider.parser.errorlog.ErrorLogAnalyzer;
 import org.apache.skywalking.oap.server.receiver.browser.provider.parser.errorlog.ErrorLogParserListenerManager;
+import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.decorators.BrowserPerfDataDecorator;
 import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.PerfDataAnalyzer;
 import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.PerfDataParserListenerManager;
+import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.decorators.BrowserResourcePerfDataDecorator;
+import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.decorators.BrowserWebInteractionPerfDataDecorator;
+import org.apache.skywalking.oap.server.receiver.browser.provider.parser.performance.decorators.BrowserWebVitalsPerfDataDecorator;
 import org.apache.skywalking.oap.server.telemetry.TelemetryModule;
 import org.apache.skywalking.oap.server.telemetry.api.CounterMetrics;
 import org.apache.skywalking.oap.server.telemetry.api.HistogramMetrics;
@@ -74,7 +81,7 @@ public class BrowserPerfServiceHTTPHandler {
 
         errorLogHistogram = metricsCreator.createHistogramMetric(
             "browser_error_log_in_latency", "The process latency of browser error log", new MetricsTag.Keys("protocol"),
-            new MetricsTag.Values("grpc")
+            new MetricsTag.Values("http")
         );
         logErrorCounter = metricsCreator.createCounter(
             "browser_error_log_analysis_error_count", "The error number of browser error log analysis",
@@ -116,8 +123,52 @@ public class BrowserPerfServiceHTTPHandler {
     @Post("/browser/perfData")
     public Commands collectPerfData(final BrowserPerfData browserPerfData) {
         try (HistogramMetrics.Timer ignored = perfHistogram.createTimer()) {
-            final PerfDataAnalyzer analyzer = new PerfDataAnalyzer(moduleManager, perfDataListenerManager, config);
-            analyzer.doAnalysis(browserPerfData);
+            final PerfDataAnalyzer analyzer = new PerfDataAnalyzer(perfDataListenerManager);
+            analyzer.doAnalysis(new BrowserPerfDataDecorator(browserPerfData));
+            return Commands.newBuilder().build();
+        } catch (Throwable e) {
+            log.error(e.getMessage(), e);
+            perfErrorCounter.inc();
+            throw e;
+        }
+    }
+
+    @Post("/browser/perfData/webVitals")
+    public Commands collectWebVitalsPerfData(final BrowserWebVitalsPerfData browserPerfData) {
+        try (HistogramMetrics.Timer ignored = perfHistogram.createTimer()) {
+            final PerfDataAnalyzer analyzer = new PerfDataAnalyzer(perfDataListenerManager);
+            analyzer.doAnalysis(new BrowserWebVitalsPerfDataDecorator(browserPerfData));
+            return Commands.newBuilder().build();
+        } catch (Throwable e) {
+            log.error(e.getMessage(), e);
+            perfErrorCounter.inc();
+            throw e;
+        }
+    }
+
+    @Post("/browser/perfData/resources")
+    public Commands collectResourcesPerfData(final List<BrowserResourcePerfData> resourceList) {
+        try (HistogramMetrics.Timer ignored = perfHistogram.createTimer()) {
+            resourceList.stream().filter(resource -> resource.getDuration() > 0 && resource.getSize() > 0)
+                .forEach(resource -> {
+                    final PerfDataAnalyzer analyzer = new PerfDataAnalyzer(perfDataListenerManager);
+                    analyzer.doAnalysis(new BrowserResourcePerfDataDecorator(resource));
+                });
+            return Commands.newBuilder().build();
+        } catch (Throwable e) {
+            log.error(e.getMessage(), e);
+            perfErrorCounter.inc();
+            throw e;
+        }
+    }
+
+    @Post("/browser/perfData/webInteractions")
+    public Commands collectWebInteractionsPerfData(final List<BrowserWebInteractionsPerfData> perfDataList) {
+        try (HistogramMetrics.Timer ignored = perfHistogram.createTimer()) {
+            perfDataList.forEach(perfData -> {
+                final PerfDataAnalyzer analyzer = new PerfDataAnalyzer(perfDataListenerManager);
+                analyzer.doAnalysis(new BrowserWebInteractionPerfDataDecorator(perfData));
+            });
             return Commands.newBuilder().build();
         } catch (Throwable e) {
             log.error(e.getMessage(), e);
